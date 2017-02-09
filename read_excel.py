@@ -1,5 +1,5 @@
 # Downloaded from the openCobra github at https://github.com/opencobra, under the m_model_collection project.
-# I have edited it to use with our lab's existing formats.
+# I have edited it to work with our lab's existing file formats of network models.
 from warnings import warn
 
 from six import string_types, iteritems
