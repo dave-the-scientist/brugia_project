@@ -80,7 +80,7 @@ def topology_analysis(model):
             unused_mtb_str += '\n\t%s' % (', '.join(not_used))
     print('\nUnused metabolites: %s' % unused_mtb_str)
 
-# Shadow prices.
+### I have 2 active overview.doc files. Have to resolve their differences on the PC, then fix the dir structure.
 
 
 ov_model_file = 'model_o_vol.xlsx'
