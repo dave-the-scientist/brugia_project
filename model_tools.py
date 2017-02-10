@@ -20,6 +20,37 @@ def basic_stats(model):
     end_str = '\nEnd of basic stats for model: %s' % model
     print('%s\n%s' % (end_str, '-'*len(end_str.strip())))
 def topology_analysis(model):
+    mtbs, blocked = get_metabolite_reactions(model)
+    print('\nBlocked reactions: %i allowing no flux.' % len(blocked))
+    sprfls = set(m.id for m in model.metabolites) - set(mtbs.keys())
+    if len(sprfls) == 0:
+        sprfls_mtb_str = '0.'
+    else:
+        sprfls_mtb_str = '%i described but not part of any reaction.' % len(sprfls)
+    print('\nSuperfluous metabolites: %s' % sprfls_mtb_str)
+    not_gen, not_used = [], []
+    for mtb, data in mtbs.items():
+        if len(data['product']) == 0:
+            not_gen.append(mtb)
+        if len(data['reactant']) == 0:
+            not_used.append(mtb)
+    if len(not_gen) == 0:
+        unavail_metab_str = '0. All metabolites produced by reactions.'
+    else:
+        unavail_metab_str = '%i metabolites used in reactions, but not produced by any.' % len(not_gen)
+        if verbose:
+            not_gen.sort()
+            unavail_metab_str += '\n\t%s' % (' '.join(not_gen))
+    print('\nUnavailable metabolites: %s' % unavail_metab_str)
+    if len(not_used) == 0:
+        unused_mtb_str = '0. All metabolites used in reactions.'
+    else:
+        unused_mtb_str = '%i metabolites produced in reactions, but not used by any.' % len(not_used)
+        if verbose:
+            not_used.sort()
+            unused_mtb_str += '\n\t%s' % (' '.join(not_used))
+    print('\nUnused metabolites: %s' % unused_mtb_str)
+def get_metabolite_reactions(model):
     mtbs, blocked = {}, []
     for rxn in model.reactions:
         r_id = rxn.id
@@ -50,35 +81,7 @@ def topology_analysis(model):
                 mtbs.setdefault(m_id, {'product':[], 'reactant':[]})['product'].append(r_id)
             if rct:
                 mtbs.setdefault(m_id, {'product':[], 'reactant':[]})['reactant'].append(r_id)
-    print('\nBlocked reactions: %i allowing no flux.' % len(blocked))
-    sprfls = set(m.id for m in model.metabolites) - set(mtbs.keys())
-    if len(sprfls) == 0:
-        sprfls_mtb_str = '0.'
-    else:
-        sprfls_mtb_str = '%i described but not part of any reaction.' % len(sprfls)
-    print('\nSuperfluous metabolites: %s' % sprfls_mtb_str)
-    not_gen, not_used = [], []
-    for mtb, data in mtbs.items():
-        if len(data['product']) == 0:
-            not_gen.append(mtb)
-        if len(data['reactant']) == 0:
-            not_used.append(mtb)
-    if len(not_gen) == 0:
-        unavail_metab_str = '0. All metabolites produced by reactions.'
-    else:
-        unavail_metab_str = '%i metabolites used in reactions, but not produced by any.' % len(not_gen)
-        if verbose:
-            not_gen.sort()
-            unavail_metab_str += '\n\t%s' % (', '.join(not_gen))
-    print('\nUnavailable metabolites: %s' % unavail_metab_str)
-    if len(not_used) == 0:
-        unused_mtb_str = '0. All metabolites used in reactions.'
-    else:
-        unused_mtb_str = '%i metabolites produced in reactions, but not used by any.' % len(not_used)
-        if verbose:
-            not_used.sort()
-            unused_mtb_str += '\n\t%s' % (', '.join(not_used))
-    print('\nUnused metabolites: %s' % unused_mtb_str)
+    return mtbs, blocked
 
 def compare_models(m1, m2):
     descrip_str = '\n\nComparing models: %s and %s' % (m1, m2)
@@ -89,6 +92,22 @@ def compare_models(m1, m2):
 def compare_reactions(m1, m2):
     m1_rxns = set(r.id for r in m1.reactions)
     m2_rxns = set(r.id for r in m2.reactions)
+    common_rxns = m1_rxns & m2_rxns
+    print('\nCommon reactions: %i.' % len(common_rxns))
+    m1_unique = list(m1_rxns - m2_rxns)
+    m1_uniq_str = '%i' % len(m1_unique)
+    if verbose:
+        m1_unique.sort()
+        m1_uniq_str += ':\n\t%s' % (' '.join(m1_unique))
+    print('\nUnique to %s: %s.' % (m1, m1_uniq_str))
+    m2_unique = list(m2_rxns - m1_rxns)
+    m2_uniq_str = '%i' % len(m2_unique)
+    if verbose:
+        m2_unique.sort()
+        m2_uniq_str += ':\n\t%s' % (' '.join(m2_unique))
+    print('\nUnique to %s: %s.' % (m2, m2_uniq_str))
+
+    mtbs, blocked = get_metabolite_reactions(m1)
 
 
 ov_model_file = 'model_o_vol.xlsx'
