@@ -87,7 +87,8 @@ def compare_models(m1, m2):
     end_str = '\nEnd of comparison between: %s and %s' % (m1, m2)
     print('%s\n%s' % (end_str, '-'*len(end_str.strip())))
 def compare_reactions(m1, m2):
-    pass
+    m1_rxns = set(r.id for r in m1.reactions)
+    m2_rxns = set(r.id for r in m2.reactions)
 
 
 ov_model_file = 'model_o_vol.xlsx'
