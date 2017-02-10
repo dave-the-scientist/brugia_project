@@ -81,7 +81,8 @@ def topology_analysis(model):
     print('\nUnused metabolites: %s' % unused_mtb_str)
 
 def compare_models(m1, m2):
-    pass
+    descrip_str = '\n\nComparing models: %s and %s' % (m1, m2)
+    print('%s\n%s' % (descrip_str, '='*len(descrip_str.strip())))
 
 
 ov_model_file = 'model_o_vol.xlsx'
@@ -92,3 +93,5 @@ bm = read_excel(bm_model_file)
 
 basic_stats(ov)
 basic_stats(bm)
+
+compare_models(ov, bm)
