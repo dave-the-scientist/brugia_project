@@ -83,9 +83,11 @@ def topology_analysis(model):
 def compare_models(m1, m2):
     descrip_str = '\n\nComparing models: %s and %s' % (m1, m2)
     print('%s\n%s' % (descrip_str, '='*len(descrip_str.strip())))
-
+    compare_reactions(m1, m2)
     end_str = '\nEnd of comparison between: %s and %s' % (m1, m2)
     print('%s\n%s' % (end_str, '-'*len(end_str.strip())))
+def compare_reactions(m1, m2):
+    pass
 
 
 ov_model_file = 'model_o_vol.xlsx'
