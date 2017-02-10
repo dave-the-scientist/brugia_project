@@ -84,6 +84,9 @@ def compare_models(m1, m2):
     descrip_str = '\n\nComparing models: %s and %s' % (m1, m2)
     print('%s\n%s' % (descrip_str, '='*len(descrip_str.strip())))
 
+    end_str = '\nEnd of comparison between: %s and %s' % (m1, m2)
+    print('%s\n%s' % (end_str, '-'*len(end_str.strip())))
+
 
 ov_model_file = 'model_o_vol.xlsx'
 bm_model_file = 'model_b_mal.xlsx'
