@@ -5,10 +5,13 @@ m.reactions or .metabolites: .get_by_id()
 rxn.reactants or .products
 rxn.get_coefficient('C00689'): -1 for consumed, +1 for produced
 rxn.metabolites: {'C00689': -1, ...}
+mtb.reactions: all of the reactions that produce or consume mtb.
 mtb.summary(): rates mtb is being produced and used in the current FBA.
 model.metabolites.C00042 is the mtb object for succinate.
 model.reactions.R02146.x is the flux through the reaction in the current FBA state.
+model.reactions.R02146.reaction is a human-readable description.
 """
+from math import sqrt
 from read_excel import read_excel
 
 # # #  Options
@@ -141,20 +144,116 @@ def print_comparison(m1, m2, set1, set2, term):
         unique_str2 += ':\n\t%s' % (' '.join(unique2))
     print('\n%s unique to %s: %s.' % (term.capitalize(), m2, unique_str2))
 
+def compare_objective_functions(rxn1, rxn2):
+    m1, m2 = rxn1.model, rxn2.model
+    coefs1, coefs2 = rxn1.metabolites, rxn2.metabolites
+    mtbs1 = set(c.id for c in coefs1)
+    mtbs2 = set(c.id for c in coefs2)
+    common = list(mtbs1 & mtbs2)
+    common.sort(key=lambda c: rxn1.get_coefficient(c))
+    print('\nObjective metabolites in common: %i.' % len(common))
+    buff = []
+    for c in common:
+        mtb1 = m1.metabolites.get_by_id(c)
+        mtb2 = m2.metabolites.get_by_id(c)
+        coef1, coef2 = -rxn1.get_coefficient(c), -rxn2.get_coefficient(c)
+        mtb1.reactions
+        # flux1 = sum(for r in ^, r.x * r.metabolites[mtb1])
+        #flux1, flux2 = ?
+        # shadow price = mtb.y; probably useful?
+        # print the producing reactions too.
+        buff.append('%s  (%.3f | %.3f)' % (c, coef1, coef2))
+    print('(coefficient 1 | coefficient 2) => flux 1 | flux2\n%s' % '\n'.join(buff))
 
+
+def visualize_all_reactions(model, flux_range, colour_range, to_file=None):
+    data = [(r.id, r.x) for r in model.reactions]
+    output = kegg_search_color_pathway(data, flux_range[0], flux_range[1], colour_range[0], colour_range[1], colour_range[2])
+    if not to_file:
+        print('\nValues:\n%s' % output)
+    else:
+        with open(to_file, 'w') as f:
+            f.write(output)
+        print('\nVisualization values for %s stored at %s' % (model, to_file))
+def kegg_search_color_pathway_old(data, min_val, max_val, min_col, max_col):
+    """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database.
+    data = [('rxn1_id', 42.3), ('rxn2_id', -332.17), ...], min_col = '#00ccee'"""
+    val_delta = float(max_val - min_val)
+    min_rgb = (int(min_col[1:3], 16), int(min_col[3:5], 16), int(min_col[5:7], 16))
+    max_rgb = (int(max_col[1:3], 16), int(max_col[3:5], 16), int(max_col[5:7], 16))
+    rgb_delta = [hc-lc for hc,lc in zip(max_rgb, min_rgb)]
+    buff = []
+    for r_id, val in data:
+        percent = (val - min_val) / val_delta
+        buff.append('%s %s' % (r_id, calc_colour(percent, min_rgb, rgb_delta)))
+    return '\n'.join(buff)
+def kegg_search_color_pathway(data, min_val, max_val, min_col, zero_col, max_col):
+    """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database.
+    data = [('rxn1_id', 42.3), ('rxn2_id', -332.17), ...], min_col = '#00ccee'"""
+    val_delta = float(max_val - min_val)
+    min_rgb = (int(min_col[1:3], 16), int(min_col[3:5], 16), int(min_col[5:7], 16))
+    max_rgb = (int(max_col[1:3], 16), int(max_col[3:5], 16), int(max_col[5:7], 16))
+    zero_rgb = (int(zero_col[1:3], 16), int(zero_col[3:5], 16), int(zero_col[5:7], 16))
+    pos_rgb_delta = [c-zc for c,zc in zip(max_rgb, zero_rgb)]
+    neg_rgb_delta = [c-zc for c,zc in zip(min_rgb, zero_rgb)]
+    buff = []
+    for r_id, val in data:
+        if val == 0.0:
+            col = zero_col
+        elif val < 0:
+            percent = calc_colour_percent(val, min_val, 'sqrt')
+            col = calc_colour(percent, zero_rgb, neg_rgb_delta)
+        else:
+            percent = calc_colour_percent(val, max_val, 'sqrt')
+            col = calc_colour(percent, zero_rgb, pos_rgb_delta)
+        buff.append('%s %s' % (r_id, col))
+    return '\n'.join(buff)
+def calc_colour_percent(val, end_val, xform=None):
+    p = float(abs(val)) / abs(end_val)
+    if xform == 'sqrt':
+        return sqrt(p)
+    else:
+        return p
+def calc_colour(percent, min_rgb, rgb_delta):
+    col_vals = tuple(int(round(dc*percent+lc, 0)) for lc,dc in zip(min_rgb, rgb_delta))
+    return '#%.2x%.2x%.2x' % (col_vals)
+
+
+# # #  Options
 verbose = False
+min_flux = -1000
+max_flux = 1000
+min_colour = '#ff0000'
+zero_colour = '#99ffff' # '#b3ffff' is similar, a little lighter.
+max_colour = '#00ff00'
+colour_range = (min_colour, zero_colour, max_colour)
+
+test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
+test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
+
 ov_model_file = 'model_o_vol.xlsx'
 bm_model_file = 'model_b_mal.xlsx'
+ov_viz_file = 'model_o_vol_flux.txt'
+bm_viz_file = 'model_b_mal_flux.txt'
 
 ov = read_excel(ov_model_file)
 bm = read_excel(bm_model_file)
 
-basic_stats(ov)
-basic_stats(bm)
-compare_models(ov, bm)
+#basic_stats(ov)
+#basic_stats(bm)
+#compare_models(ov, bm)
 
 ov.optimize()
-ov.summary()
-
 bm.optimize()
+
+ov.summary()
 bm.summary()
+
+#print test_data
+#print kegg_search_color_pathway2(test_data, min_flux, max_flux, min_colour, zero_colour, max_colour)
+visualize_all_reactions(ov, (min_flux, max_flux), colour_range, to_file=ov_viz_file)
+visualize_all_reactions(bm, (min_flux, max_flux), colour_range, to_file=bm_viz_file)
+
+compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
+
+# #  TO modify bounds using RNAseq, just go rpkm/max_rpkm*(upper bound); likewise for lower.
