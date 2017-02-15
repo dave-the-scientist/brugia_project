@@ -12,6 +12,7 @@ model.reactions.R02146.x is the flux through the reaction in the current FBA sta
 model.reactions.R02146.reaction is a human-readable description.
 """
 from math import sqrt
+import cobra
 from read_excel import read_excel
 
 # # #  Options
@@ -153,18 +154,33 @@ def compare_objective_functions(rxn1, rxn2):
     common.sort(key=lambda c: rxn1.get_coefficient(c))
     print('\nObjective metabolites in common: %i.' % len(common))
     buff = []
-    for c in common:
-        mtb1 = m1.metabolites.get_by_id(c)
-        mtb2 = m2.metabolites.get_by_id(c)
-        coef1, coef2 = -rxn1.get_coefficient(c), -rxn2.get_coefficient(c)
-        mtb1.reactions
-        # flux1 = sum(for r in ^, r.x * r.metabolites[mtb1])
-        #flux1, flux2 = ?
-        # shadow price = mtb.y; probably useful?
-        # print the producing reactions too.
-        buff.append('%s  (%.3f | %.3f)' % (c, coef1, coef2))
-    print('(coefficient 1 | coefficient 2) => flux 1 | flux2\n%s' % '\n'.join(buff))
-
+    for c_id in common:
+        mtb1 = m1.metabolites.get_by_id(c_id)
+        mtb2 = m2.metabolites.get_by_id(c_id)
+        coef1, coef2 = -coefs1[mtb1], -coefs2[mtb2]
+        fluxes1 = [r.x*r.metabolites[mtb1] for r in mtb1.reactions]
+        flux1 = sum(f for f in fluxes1 if f > 0)
+        fluxes2 = [r.x*r.metabolites[mtb2] for r in mtb2.reactions]
+        flux2 = sum(f for f in fluxes2 if f > 0)
+        buff.append('%s (%.3f | %.3f) [%.1f | %.1f] => %.1f | %.1f' % (c_id, coef1, coef2, mtb1.y, mtb2.y, flux1, flux2))
+    print('(coefficient 1 | coefficient 2) [shadow 1 | shadow 2] => flux 1 | flux2')
+    print('%s' % '\n'.join(buff))
+def analyze_shadows(model, num):
+    obj_c_ids = set()
+    for r in model.objective:
+        for c in r.metabolites:
+            obj_c_ids.add(c.id)
+    mtbs_shs = []
+    for c in model.metabolites:
+        if c.id in obj_c_ids: continue
+        mtbs_shs.append(c)
+    mtbs_shs.sort(key=lambda c: c.y)
+    print('\nShadow prices for %s.' % model)
+    neg_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:num]]
+    print('Negative (high value):\n%s' % ('\n'.join(neg_shs)))
+    print ', '.join('%s %.1f'%(r.id, r.x) for r in model.metabolites.C00412.reactions)
+    pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
+    print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
 def visualize_all_reactions(model, flux_range, colour_range, to_file=None):
     data = [(r.id, r.x) for r in model.reactions]
@@ -218,9 +234,11 @@ def calc_colour(percent, min_rgb, rgb_delta):
     col_vals = tuple(int(round(dc*percent+lc, 0)) for lc,dc in zip(min_rgb, rgb_delta))
     return '#%.2x%.2x%.2x' % (col_vals)
 
+def analyze_fva():
+    pass
 
-# # #  Options
-verbose = False
+
+# # #  Parameters
 min_flux = -1000
 max_flux = 1000
 min_colour = '#ff0000'
@@ -231,29 +249,47 @@ colour_range = (min_colour, zero_colour, max_colour)
 test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
+# # #  Run-time options
 ov_model_file = 'model_o_vol.xlsx'
 bm_model_file = 'model_b_mal.xlsx'
 ov_viz_file = 'model_o_vol_flux.txt'
 bm_viz_file = 'model_b_mal_flux.txt'
+verbose = True
+topology_analysis = False
+save_visualization_file = True
 
-ov = read_excel(ov_model_file)
-bm = read_excel(bm_model_file)
-
-#basic_stats(ov)
-#basic_stats(bm)
-#compare_models(ov, bm)
-
+ov = read_excel(ov_model_file, verbose=verbose)
+bm = read_excel(bm_model_file, verbose=verbose)
 ov.optimize()
 bm.optimize()
 
-ov.summary()
-bm.summary()
+if topology_analysis:
+    basic_stats(ov)
+    basic_stats(bm)
+    compare_models(ov, bm)
 
-#print test_data
-#print kegg_search_color_pathway2(test_data, min_flux, max_flux, min_colour, zero_colour, max_colour)
-visualize_all_reactions(ov, (min_flux, max_flux), colour_range, to_file=ov_viz_file)
-visualize_all_reactions(bm, (min_flux, max_flux), colour_range, to_file=bm_viz_file)
+if verbose:
+    ov.summary()
+    bm.summary()
+
+if save_visualization_file:
+    visualize_all_reactions(ov, (min_flux, max_flux), colour_range, to_file=ov_viz_file)
+    visualize_all_reactions(bm, (min_flux, max_flux), colour_range, to_file=bm_viz_file)
 
 compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
+analyze_shadows(ov, 10)
+analyze_shadows(bm, 10)
 
-# #  TO modify bounds using RNAseq, just go rpkm/max_rpkm*(upper bound); likewise for lower.
+ov_fva = cobra.flux_analysis.flux_variability_analysis(ov)
+bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
+
+# Visualize the FVA data somehow (can be high to low, high to zero, low to zero, etc)
+#  - Maybe average the bounds, that value picks colour, size of variability picks lightness, etc.
+
+# Dead-end reactions are quite common in metaNets.
+#  - Could iterate over metabolites, adding sink or transport reactions. See which have an impact on the f.
+#  - Manually, search kegg for rxns with unavailable reactants. See where they are, if some are the same pathways, etc. Might indicate missing reactions.
+
+# Might be a good idea to compare my models to the published human ones (at least for the general metabolism).
+
+# #  TO modify constraints using RNAseq, just go rpkm/max_rpkm*(upper bound); likewise for lower.
