@@ -178,7 +178,7 @@ def analyze_shadows(model, num):
     print('\nShadow prices for %s.' % model)
     neg_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:num]]
     print('Negative (high value):\n%s' % ('\n'.join(neg_shs)))
-    print ', '.join('%s %.1f'%(r.id, r.x) for r in model.metabolites.C00412.reactions)
+    print ', '.join('%s %.1f'%(r.id, r.x) for r in model.metabolites.C00124.reactions)
     pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
     print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
@@ -277,11 +277,14 @@ if save_visualization_file:
     visualize_all_reactions(bm, (min_flux, max_flux), colour_range, to_file=bm_viz_file)
 
 compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
-analyze_shadows(ov, 10)
-analyze_shadows(bm, 10)
+analyze_shadows(ov, 20)
+analyze_shadows(bm, 20)
 
 ov_fva = cobra.flux_analysis.flux_variability_analysis(ov)
 bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
+
+# Compare constraints between the models.
+# Add method to save model as excel file.
 
 # Visualize the FVA data somehow (can be high to low, high to zero, low to zero, etc)
 #  - Maybe average the bounds, that value picks colour, size of variability picks lightness, etc.
@@ -289,7 +292,17 @@ bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
 # Dead-end reactions are quite common in metaNets.
 #  - Could iterate over metabolites, adding sink or transport reactions. See which have an impact on the f.
 #  - Manually, search kegg for rxns with unavailable reactants. See where they are, if some are the same pathways, etc. Might indicate missing reactions.
+#  - Or, for unavailable mtbs, see if any are connected by reactions. then group them together, see if I end up at an unusable mtb.
+
+# A good way to compare models might be build a new network from a solution.
+#  - Start at obj fxn, backtrack to transport reactions using those with flux.
+#  - Then when comparing two of these nets, identify the portions that take alternate paths to end up at some common intermediate.
+# Related: after optimizing, implement method to trace back from the obj fxn to each mtb. Keep path of rxns (use to watch out for cycles).
+#  - Should
 
 # Might be a good idea to compare my models to the published human ones (at least for the general metabolism).
 
-# #  TO modify constraints using RNAseq, just go rpkm/max_rpkm*(upper bound); likewise for lower.
+# To modify constraints using RNAseq, just go rpkm/max_rpkm*(upper bound); likewise for lower.
+#  - However, this doesn't account for different reactions having different speeds (kd?).
+#  - Maybe use a less-strict transformation, like sqrt(rpkm/max).
+#  - Could also apply the transcriptomic constraints, then go through reactions and try reverting each. See which has the biggest impact on obj fxn; maybe that one should be relaxed.
