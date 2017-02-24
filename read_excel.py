@@ -12,14 +12,16 @@ from cobra import Model, Metabolite, Reaction
 # Potential string keys in the excel files
 RXN_SHEET_NAMES = {"reaction list", "reactions"}
 MET_SHEET_NAMES = {"metabolite list", "metabolites"}
-MET_ID_KEYS = {"abbreviation", "abbreviations", "metabolite abbreviation"}
-MET_NAME_KEYS = {"metabolite name", "officialname", "metabolite_name", "description"}
+MET_ID_KEYS = {"abbreviation", "abbreviations", "metabolite abbreviation",
+    "machine readable id"}
+MET_NAME_KEYS = {"metabolite name", "officialname", "metabolite_name", "description",
+    "human readable id"}
 MET_FORMULA_KEYS = {"chemical formula", "formula"}
 RXN_ID_KEYS = {"abbreviation", "reaction #", "abbrev",
-               "reaction id", "reaction abbreviation"}
-RXN_NAME_KEYS = {"name", "Rxn description", "description"}
-RXN_STR_KEYS = {"equation", "reaction formula", "reaction"}
-RXN_GPR_KEYS = {"gene", "geneassociation", "gpr"}
+    "reaction id", "reaction abbreviation", "id"}
+RXN_NAME_KEYS = {"name", "rxn description", "description"}
+RXN_STR_KEYS = {"equation", "reaction formula", "reaction", "machine readable"}
+RXN_GPR_KEYS = {"gene", "genes", "geneassociation", "gpr"}
 RXN_LB_KEYS = {"lb", "lower bound", "lower bounds"}
 RXN_UB_KEYS = {"ub", "upper bound", "upper bounds"}
 RXN_OBJ_KEYS = {"objective"}
@@ -247,6 +249,7 @@ def read_excel(
             rxn.lower_bound = float(row[rxn_lb_key])
         if rxn_ub_key is not None:
             rxn.upper_bound = float(row[rxn_ub_key])
+        # #  Use default values, with reversibility from rxn.
 
     # fix upper and lower bounds if they include infinity
     inf = float("inf")

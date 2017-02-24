@@ -178,32 +178,21 @@ def analyze_shadows(model, num):
     print('\nShadow prices for %s.' % model)
     neg_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:num]]
     print('Negative (high value):\n%s' % ('\n'.join(neg_shs)))
-    print ', '.join('%s %.1f'%(r.id, r.x) for r in model.metabolites.C00124.reactions)
     pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
     print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
-def visualize_all_reactions(model, flux_range, colour_range, to_file=None):
+def visualize_fba_reactions(model, flux_range, colour_range, to_file_str=None):
     data = [(r.id, r.x) for r in model.reactions]
-    output = kegg_search_color_pathway(data, flux_range[0], flux_range[1], colour_range[0], colour_range[1], colour_range[2])
-    if not to_file:
+    data.sort(key=lambda r: r[0])
+    output = kegg_search_color_pathway_fba(data, flux_range[0], flux_range[1], colour_range[0], colour_range[1], colour_range[2])
+    if not to_file_str:
         print('\nValues:\n%s' % output)
     else:
+        to_file = to_file_str % 'fba'
         with open(to_file, 'w') as f:
             f.write(output)
-        print('\nVisualization values for %s stored at %s' % (model, to_file))
-def kegg_search_color_pathway_old(data, min_val, max_val, min_col, max_col):
-    """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database.
-    data = [('rxn1_id', 42.3), ('rxn2_id', -332.17), ...], min_col = '#00ccee'"""
-    val_delta = float(max_val - min_val)
-    min_rgb = (int(min_col[1:3], 16), int(min_col[3:5], 16), int(min_col[5:7], 16))
-    max_rgb = (int(max_col[1:3], 16), int(max_col[3:5], 16), int(max_col[5:7], 16))
-    rgb_delta = [hc-lc for hc,lc in zip(max_rgb, min_rgb)]
-    buff = []
-    for r_id, val in data:
-        percent = (val - min_val) / val_delta
-        buff.append('%s %s' % (r_id, calc_colour(percent, min_rgb, rgb_delta)))
-    return '\n'.join(buff)
-def kegg_search_color_pathway(data, min_val, max_val, min_col, zero_col, max_col):
+        print('\nFBA flux values for %s stored at %s' % (model, to_file))
+def kegg_search_color_pathway_fba(data, min_val, max_val, min_col, zero_col, max_col):
     """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database.
     data = [('rxn1_id', 42.3), ('rxn2_id', -332.17), ...], min_col = '#00ccee'"""
     val_delta = float(max_val - min_val)
@@ -228,36 +217,100 @@ def calc_colour_percent(val, end_val, xform=None):
     p = float(abs(val)) / abs(end_val)
     if xform == 'sqrt':
         return sqrt(p)
+    elif xform == 'inv': # Used to effectively reverse the gradient direction.
+        return 1.0 - p
     else:
         return p
 def calc_colour(percent, min_rgb, rgb_delta):
-    col_vals = tuple(int(round(dc*percent+lc, 0)) for lc,dc in zip(min_rgb, rgb_delta))
-    return '#%.2x%.2x%.2x' % (col_vals)
+    return '#%.2x%.2x%.2x' % (calc_colour_rgb(percent, min_rgb, rgb_delta))
+def calc_colour_rgb(percent, min_rgb, rgb_delta):
+    return tuple(int(round(dc*percent+lc, 0)) for lc,dc in zip(min_rgb, rgb_delta))
 
-def analyze_fva():
-    pass
+def visualize_fva_reactions(fva_rxns, flux_range, colour_range, to_file_str):
+    data = [(r, vals['minimum'], vals['maximum']) for r,vals in fva_rxns.items()]
+    data.sort(key=lambda r: r[0])
+    output = kegg_search_color_pathway_fva(data, flux_range[0], flux_range[1], colour_range[0], colour_range[1], colour_range[2])
+    to_file = to_file_str % 'fva'
+    with open(to_file, 'w') as f:
+        f.write(output)
+    print('\nFVA values written to %s' % (to_file))
+def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max_col):
+    """This uses the same colour gradient as the FBA variant, but it also maps
+    flux variance. The average of the min and max is set as the 'value' for the
+    colour gradient, which is then modified by the variance, towards black. So
+    the darker the colour, the higher the variance through the reaction."""
+    val_delta = float(max_val - min_val)
+    min_rgb = (int(min_col[1:3], 16), int(min_col[3:5], 16), int(min_col[5:7], 16))
+    max_rgb = (int(max_col[1:3], 16), int(max_col[3:5], 16), int(max_col[5:7], 16))
+    zero_rgb = (int(zero_col[1:3], 16), int(zero_col[3:5], 16), int(zero_col[5:7], 16))
+    black_rgb = (0, 0, 0)
+    pos_rgb_delta = [c-zc for c,zc in zip(max_rgb, zero_rgb)]
+    neg_rgb_delta = [c-zc for c,zc in zip(min_rgb, zero_rgb)]
+    buff = []
+    for r_id, min_var, max_var in data:
+        val = (min_var + max_var) / 2.0
+        if val == 0.0:
+            col_rgb = zero_rgb
+        elif val < 0:
+            percent = calc_colour_percent(val, min_val, xform='sqrt')
+            col_rgb = calc_colour_rgb(percent, zero_rgb, neg_rgb_delta)
+        else:
+            percent = calc_colour_percent(val, max_val, xform='sqrt')
+            col_rgb = calc_colour_rgb(percent, zero_rgb, pos_rgb_delta)
+        var_prcnt = calc_colour_percent(max_var-min_var, val_delta, xform='inv')
+        var_col = calc_colour(var_prcnt, black_rgb, col_rgb)
+        buff.append('%s %s' % (r_id, var_col))
+    return '\n'.join(buff)
+
+def notable_fluxes(models, fvas, rxn_ids):
+    """rxn_ids = [(Common name, (DIFFUSION_1, ALTERNATE_ID)), ...]"""
+    out_str = '%i to %i'
+    print('\nModel fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models)))
+    print('Notable transport fluxes:')
+    for name, r_ids in rxn_ids:
+        buff = []
+        for fva in fvas:
+            for r_id in r_ids:
+                data = fva.get(r_id, None)
+                if data != None:
+                    buff.append(out_str % ( int(round(data['minimum'])), int(round(data['maximum'])) ))
+                    break
+            else:
+                buff.append('N/A')
+        print('%s: %s' % (name, ' | '.join(buff)))
 
 
 # # #  Parameters
 min_flux = -1000
 max_flux = 1000
 min_colour = '#ff0000'
-zero_colour = '#99ffff' # '#b3ffff' is similar, a little lighter.
+zero_colour = '#ffff00' # '#99ffff' # '#b3ffff' is similar, a little lighter.
 max_colour = '#00ff00'
 colour_range = (min_colour, zero_colour, max_colour)
-
-test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
-test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 # # #  Run-time options
 ov_model_file = 'model_o_vol.xlsx'
 bm_model_file = 'model_b_mal.xlsx'
-ov_viz_file = 'model_o_vol_flux.txt'
-bm_viz_file = 'model_b_mal_flux.txt'
+ov_viz_str = 'model_o_vol_%s.txt'
+bm_viz_str = 'model_b_mal_%s.txt'
 verbose = True
 topology_analysis = False
-save_visualization_file = True
+fba_analysis = False
+fva_analysis = True
 
+# # #  Program objects
+notable_reactions = [
+    ('Glucose', ('CARBON_SOURCE','EX00031')),
+    ('Oxygen', ('DIFFUSION_2','EX00007')),
+    ('CO2', ('DIFFUSION_3','EX00011')),
+    ('Water', ('DIFFUSION_1','EX00001')),
+    ('Orthophosphate', ('DIFFUSION_6','EX00009')),
+    ('Bicarb', ('DIFFUSION_8','EX00288'))
+]
+test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
+test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
+
+# # #  Run steps
 ov = read_excel(ov_model_file, verbose=verbose)
 bm = read_excel(bm_model_file, verbose=verbose)
 ov.optimize()
@@ -272,22 +325,29 @@ if verbose:
     ov.summary()
     bm.summary()
 
-if save_visualization_file:
-    visualize_all_reactions(ov, (min_flux, max_flux), colour_range, to_file=ov_viz_file)
-    visualize_all_reactions(bm, (min_flux, max_flux), colour_range, to_file=bm_viz_file)
+if fba_analysis:
+    compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
+    analyze_shadows(ov, 20)
+    analyze_shadows(bm, 20)
+    visualize_fba_reactions(ov, (min_flux, max_flux), colour_range, to_file_str=ov_viz_str)
+    visualize_fba_reactions(bm, (min_flux, max_flux), colour_range, to_file_str=bm_viz_str)
 
-compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
-analyze_shadows(ov, 20)
-analyze_shadows(bm, 20)
+if fva_analysis:
+    ov_fva = cobra.flux_analysis.flux_variability_analysis(ov)
+    bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
+    visualize_fva_reactions(ov_fva, (min_flux, max_flux), colour_range, ov_viz_str)
+    visualize_fva_reactions(bm_fva, (min_flux, max_flux), colour_range, bm_viz_str)
+    notable_fluxes((ov, bm), (ov_fva, bm_fva), notable_reactions)
 
-ov_fva = cobra.flux_analysis.flux_variability_analysis(ov)
-bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
+
+
+
 
 # Compare constraints between the models.
 # Add method to save model as excel file.
-
-# Visualize the FVA data somehow (can be high to low, high to zero, low to zero, etc)
-#  - Maybe average the bounds, that value picks colour, size of variability picks lightness, etc.
+# In topology, compare exchange / intake / sink reactions.
+# Do the same after optimization, to compare preferred nutrient intake pathways.
+# - Definitely do this, to monitor some common/major metabolites.
 
 # Dead-end reactions are quite common in metaNets.
 #  - Could iterate over metabolites, adding sink or transport reactions. See which have an impact on the f.
