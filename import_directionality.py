@@ -1,20 +1,27 @@
 import pandas
 from cobra import Model, Metabolite, Reaction
-from read_excel import read_excel
+from read_excel import read_excel, write_excel
 
 elegans_file = 'iCEL1273.xlsx'
 model_in_file = 'model_o_vol.xlsx'
 model_out_file = 'model_o_vol2.xlsx'
 
 reversible_arrow = '<==>'
-irreversible_arrow = '-->'
+irreversible_arrow = ('-->', '<--')
 l_bound, u_bound = -1000, 1000
 
 old_m = read_excel(model_in_file)
-new_m = Model(model_out_file.rpartition('.')[0])
 
 pio = pandas.io.excel.ExcelFile(elegans_file)
 rxn_frame = pandas.read_excel(elegans_file, 'Reactions')
+
+def use_directionalities(old_m, new_filename):
+    try:
+        model_id = os.path.splitext(os.path.split(outfile)[1])[0]
+    except:
+        model_id = "new_model"
+    new_m = Model(model_id)
+
 
 processed = set()
 disagreements, rvsb, irrvsb, broken = [], 0, 0, 0
@@ -33,7 +40,7 @@ for i in range(len(rxn_frame)):
         continue
     if reversible_arrow in rxn_str:
         cel_direction = 'reversible'
-    elif irreversible_arrow in rxn_str:
+    elif irreversible_arrow[0] in rxn_str or irreversible_arrow[1] in rxn_str:
         cel_direction = 'irreversible'
     else:
         print('\nError: could not parse %s' % rxn_str)
@@ -75,3 +82,5 @@ disagreements.sort(key=lambda d: d[0])
 disagreements.sort(key=lambda d: d[1])
 print('\n'.join('%s should be %s, but is: %s' % (d) for d in disagreements))
 print('\n%i should have been reversible, %i irreversible, and %i were broken' % (rvsb, irrvsb, broken))
+
+write_excel(old_m, model_out_file)

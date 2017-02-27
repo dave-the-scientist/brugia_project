@@ -21,10 +21,18 @@ RXN_ID_KEYS = {"abbreviation", "reaction #", "abbrev",
     "reaction id", "reaction abbreviation", "id"}
 RXN_NAME_KEYS = {"name", "rxn description", "description"}
 RXN_STR_KEYS = {"equation", "reaction formula", "reaction", "machine readable"}
-RXN_GPR_KEYS = {"gene", "genes", "geneassociation", "gpr"}
+RXN_GPR_KEYS = {"geneassociation", "gpr"}
 RXN_LB_KEYS = {"lb", "lower bound", "lower bounds"}
 RXN_UB_KEYS = {"ub", "upper bound", "upper bounds"}
 RXN_OBJ_KEYS = {"objective"}
+RXN_SUBS_KEYS = {"subsystem", "pathway"}
+
+# defaults if no lower/upper bound
+RXN_ECS_KEYS = {"ec number", "enzyme"}
+RXN_GENES_KEYS = {"genes"}
+RXN_PROTS_KEYS = {"proteins"}
+RXN_NOTES_KEYS = {"notes", "comments"}
+RXN_CONFD_KEYS = {"confidence score"}
 
 
 def escape_str(potential_str):
@@ -79,6 +87,12 @@ def read_excel(
         rxn_rev_arrow=None,
         rxn_reversible_arrow=None,
         rxn_objective_key=None,
+        rxn_subsystem_key=None,
+        rxn_ec_num_key=None,
+        rxn_genes_key=None,
+        rxn_proteins_key=None,
+        rxn_confidence_key=None,
+        rxn_notes_key=None,
 
         met_sheet_name=None,
         met_sheet_header=0,
@@ -139,9 +153,11 @@ def read_excel(
                 if verbose:
                     print("Renamed metabolite '%s' to '%s'" % (met_id, new_id))
                 met_id = new_id
-            met = Metabolite(met_id,
-                             name=extract(met_row, met_id_key),
-                             **met_attributes)
+            if met_name_key is not None:
+                met_name = extract(met_row, met_name_key)
+            else:
+                met_name = extract(met_row, met_id_key)
+            met = Metabolite(met_id, name=met_name, **met_attributes)
 
             try:
                 m.add_metabolites(met)
@@ -186,6 +202,30 @@ def read_excel(
         rxn_objective_key = guess_name(rxn_frame.keys(), RXN_OBJ_KEYS, fail=False)
         if verbose and rxn_objective_key is None:
             print("reaction objective function column not identified")
+    if rxn_subsystem_key is None:
+        rxn_subsystem_key = guess_name(rxn_frame.keys(), RXN_SUBS_KEYS, fail=False)
+        if verbose and rxn_subsystem_key is None:
+            print("reaction subsystem column not identified")
+    if rxn_ec_num_key is None:
+        rxn_ec_num_key = guess_name(rxn_frame.keys(), RXN_ECS_KEYS, fail=False)
+        if verbose and rxn_ec_num_key is None:
+            print("reaction EC number column not identified")
+    if rxn_genes_key is None:
+        rxn_genes_key = guess_name(rxn_frame.keys(), RXN_GENES_KEYS, fail=False)
+        if verbose and rxn_genes_key is None:
+            print("reaction gene names column not identified")
+    if rxn_proteins_key is None:
+        rxn_proteins_key = guess_name(rxn_frame.keys(), RXN_PROTS_KEYS, fail=False)
+        if verbose and rxn_proteins_key is None:
+            print("reaction protein names column not identified")
+    if rxn_confidence_key is None:
+        rxn_confidence_key = guess_name(rxn_frame.keys(), RXN_CONFD_KEYS, fail=False)
+        if verbose and rxn_confidence_key is None:
+            print("reaction confidence score column not identified")
+    if rxn_notes_key is None:
+        rxn_notes_key = guess_name(rxn_frame.keys(), RXN_NOTES_KEYS, fail=False)
+        if verbose and rxn_notes_key is None:
+            print("reaction notes column not identified")
 
     for i in range(len(rxn_frame)):
         row = rxn_frame.ix[i]
@@ -211,8 +251,21 @@ def read_excel(
             # add underscores to the end of duplicate reactions
             while rxn.id in m.reactions:
                 rxn.id += "_"
+        # fill out descriptive attributes
         if rxn_objective_key is not None:
-            rxn.objective_coefficient = float(row[rxn_objective_key])
+            rxn.objective_coefficient = extract(row, rxn_objective_key, float)
+        if rxn_subsystem_key is not None:
+            rxn.subsystem = extract(row, rxn_subsystem_key)
+        if rxn_ec_num_key is not None:
+            rxn.enzyme_commission = extract(row, rxn_ec_num_key)
+        if rxn_genes_key is not None:
+            rxn.gene_names = extract(row, rxn_genes_key)
+        if rxn_proteins_key is not None:
+            rxn.protein_names = extract(row, rxn_proteins_key)
+        if rxn_confidence_key is not None:
+            rxn.confidence_notes = extract(row, rxn_confidence_key)
+        if rxn_notes_key is not None:
+            rxn.reaction_notes = extract(row, rxn_notes_key)
         m.add_reaction(rxn)
 
         # Now build the reaction from the string
@@ -271,3 +324,42 @@ def read_excel(
         reaction.upper_bound = clip_inf(reaction.upper_bound)
 
     return m
+
+def write_excel(model, outfile):
+    rxn_sheet = 'Reaction List'
+    rxn_headers = [('Abbreviation','id'), ('Description', 'name'), ('Reaction','reaction'),
+        ('GPR', 'gene_reaction_rule'), ('Genes', 'gene_names'), ('Proteins', 'protein_names'),
+        ('Subsystem', 'subsystem'), ('Reversible', 'reversibility'),
+        ('Lower bound', 'lower_bound'), ('Upper bound', 'upper_bound'),
+        ('Objective', 'objective_coefficient'), ('Confidence Score', 'confidence_notes'),
+        ('EC Number', 'enzyme_commission'), ('Notes', 'reaction_notes')]
+    mtb_sheet = 'Metabolite List'
+    mtb_headers = [('Abbreviation', 'id'), ('Description', 'name'), ('Neutral formula', ''),
+        ('Charged formula', ''), ('Charge', ''), ('Compartment', ''), ('KEGG ID', ''),
+        ('PubChem ID', ''), ('ChEBI ID', ''), ('InChI string', ''), ('SMILES', ''),
+        ('HMDB ID', '')]
+    writer = pandas.ExcelWriter(outfile, engine='xlsxwriter')
+    rxn_data = generate_sheet_data(model.reactions, rxn_headers)
+    rxn_df = generate_dataframe(rxn_sheet, rxn_headers, rxn_data, writer)
+    mtb_data = generate_sheet_data(model.metabolites, mtb_headers)
+    mtb_df = generate_dataframe(mtb_sheet, mtb_headers, mtb_data, writer)
+    writer.save()
+def generate_sheet_data(obj_list, headers, id_sort=True):
+    """obj_list should be a list of cobra Metabolite or Reaction objects."""
+    if id_sort:
+        obj_list = sorted(obj_list, key=lambda o: o.id)
+    data = {h[0]:[] for h in headers}
+    for o in obj_list:
+        for h, att in headers:
+            data[h].append(getattr(o, att, ''))
+    return data
+def generate_dataframe(sheet_name, headers, data, writer):
+    min_column_width = 6
+    col_headers = [h[0] for h in headers]
+    df = pandas.DataFrame(data)[col_headers] # The [] specifies the order of the columns.
+    df.to_excel(writer, sheet_name=sheet_name, index=False)
+    worksheet = writer.sheets[sheet_name]
+    for i, h in enumerate(col_headers):
+        col_width = max(len(h)+1, min_column_width)
+        worksheet.set_column(i, i, col_width)
+    return df
