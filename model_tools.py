@@ -1,5 +1,3 @@
-#xlrd is a module to read excel sheets.
-#as is pandas.io.excel
 """Useful atts:
 m.reactions or .metabolites: .get_by_id()
 rxn.reactants or .products
@@ -15,8 +13,6 @@ from math import sqrt
 import cobra
 from read_excel import read_excel
 
-# # #  Options
-verbose = True # True or False.
 
 def basic_stats(model):
     descrip_str = '\n\nBasic stats for model: %s' % model
@@ -289,10 +285,10 @@ max_colour = '#00ff00'
 colour_range = (min_colour, zero_colour, max_colour)
 
 # # #  Run-time options
-ov_model_file = 'model_o_vol.xlsx'
-bm_model_file = 'model_b_mal.xlsx'
-ov_viz_str = 'model_o_vol_%s.txt'
-bm_viz_str = 'model_b_mal_%s.txt'
+model_file_1 = 'model_o_vol.xlsx'
+model_file_2 = 'model_o_vol_2.xlsx'
+m1_viz_str = model_file_1.rpartition('.')[0] + '_%s.txt' # 'model_o_vol_%s.txt'
+m2_viz_str = model_file_2.rpartition('.')[0] + '_%s.txt' # 'model_b_mal_%s.txt'
 verbose = True
 topology_analysis = False
 fba_analysis = False
@@ -311,33 +307,33 @@ test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 # # #  Run steps
-ov = read_excel(ov_model_file, verbose=verbose)
-bm = read_excel(bm_model_file, verbose=verbose)
-ov.optimize()
-bm.optimize()
+m1 = read_excel(model_file_1, verbose=verbose)
+m2 = read_excel(model_file_2, verbose=verbose)
+m1.optimize()
+m2.optimize()
 
 if topology_analysis:
-    basic_stats(ov)
-    basic_stats(bm)
-    compare_models(ov, bm)
+    basic_stats(m1)
+    basic_stats(m2)
+    compare_models(m1, m2)
 
 if verbose:
-    ov.summary()
-    bm.summary()
+    m1.summary()
+    m2.summary()
 
 if fba_analysis:
-    compare_objective_functions(ov.reactions.get_by_id('BIOMASS'), bm.reactions.get_by_id('BIOMASS'))
-    analyze_shadows(ov, 20)
-    analyze_shadows(bm, 20)
-    visualize_fba_reactions(ov, (min_flux, max_flux), colour_range, to_file_str=ov_viz_str)
-    visualize_fba_reactions(bm, (min_flux, max_flux), colour_range, to_file_str=bm_viz_str)
+    compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
+    analyze_shadows(m1, 20)
+    analyze_shadows(m2, 20)
+    visualize_fba_reactions(m1, (min_flux, max_flux), colour_range, to_file_str=m1_viz_str)
+    visualize_fba_reactions(m2, (min_flux, max_flux), colour_range, to_file_str=m2_viz_str)
 
 if fva_analysis:
-    ov_fva = cobra.flux_analysis.flux_variability_analysis(ov)
-    bm_fva = cobra.flux_analysis.flux_variability_analysis(bm)
-    visualize_fva_reactions(ov_fva, (min_flux, max_flux), colour_range, ov_viz_str)
-    visualize_fva_reactions(bm_fva, (min_flux, max_flux), colour_range, bm_viz_str)
-    notable_fluxes((ov, bm), (ov_fva, bm_fva), notable_reactions)
+    m1_fva = cobra.flux_analysis.flux_variability_analysis(m1)
+    m2_fva = cobra.flux_analysis.flux_variability_analysis(m2)
+    visualize_fva_reactions(m1_fva, (min_flux, max_flux), colour_range, m1_viz_str)
+    visualize_fva_reactions(m2_fva, (min_flux, max_flux), colour_range, m2_viz_str)
+    notable_fluxes((m1, m2), (m1_fva, m2_fva), notable_reactions)
 
 
 
