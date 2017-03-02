@@ -3,8 +3,8 @@ from cobra import Model, Metabolite, Reaction
 from read_excel import read_excel, write_excel
 
 elegans_file = 'iCEL1273.xlsx'
-model_in_file = 'model_o_vol.xlsx'
-model_out_file = 'model_o_vol_2-wip.xlsx'
+model_in_file = 'model_b_mal.xlsx'
+model_out_file = 'model_b_mal_2-wip.xlsx'
 
 reversible_arrow = '<==>'
 irreversible_arrow = ('-->', '<--')
@@ -103,7 +103,6 @@ for i in range(len(rxn_frame)):
         else:
             irrvsb += 1
     if not agreed:
-        #print('%s should be %s, but is: %s' % (', '.join(r_ids), cel_direction, ', '.join(old_directions)))
         disagreements.append((', '.join(r_ids), cel_direction, ', '.join(old_directions), products))
 disagreements.sort(key=lambda d: d[0])
 disagreements.sort(key=lambda d: d[1])

@@ -258,22 +258,37 @@ def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max
         buff.append('%s %s' % (r_id, var_col))
     return '\n'.join(buff)
 
-def notable_fluxes(models, fvas, rxn_ids):
-    """rxn_ids = [(Common name, (DIFFUSION_1, ALTERNATE_ID)), ...]"""
-    out_str = '%i to %i'
-    print('\nModel fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models)))
-    print('Notable transport fluxes:')
-    for name, r_ids in rxn_ids:
+def pathway_analysis(models, fvas, pathways):
+    range_str = '%i to %i'
+    desc_str = '\nModel fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
+    print(desc_str)
+    print('-' * len(desc_str))
+    for path_desc, rxn_ids in pathways:
+        max_name_len = 0
         buff = []
-        for fva in fvas:
-            for r_id in r_ids:
-                data = fva.get(r_id, None)
-                if data != None:
-                    buff.append(out_str % ( int(round(data['minimum'])), int(round(data['maximum'])) ))
-                    break
-            else:
-                buff.append('N/A')
-        print('%s: %s' % (name, ' | '.join(buff)))
+        for rxn_data in rxn_ids:
+            name, r_ids = rxn_data[:2]
+            rxn_coef = 1.0
+            if len(rxn_data) == 3:
+                rxn_coef *= rxn_data[2]
+            if len(name) > max_name_len:
+                max_name_len = len(name)
+            vals = []
+            for fva in fvas:
+                for r_id in r_ids:
+                    data = fva.get(r_id, None)
+                    if data != None:
+                        min_max = (int(round(data['minimum'])), int(round(data['maximum'])))
+                        if rxn_coef < 0:
+                            min_max = (int(round(min_max[1]*rxn_coef)), int(round(min_max[0]*rxn_coef)))
+                        vals.append(range_str % min_max)
+                        break
+                else:
+                    vals.append('N/A')
+            buff.append( (name+':', ' | '.join(vals)) )
+        value_str = '%%-%is %%s' % (max_name_len+1)
+        pathway_values = '\n'.join(value_str % v for v in buff)
+        print('\t%s:\n%s\n' % (path_desc, pathway_values))
 
 
 # # #  Parameters
@@ -294,15 +309,41 @@ topology_analysis = False
 fba_analysis = False
 fva_analysis = True
 
-# # #  Program objects
-notable_reactions = [
-    ('Glucose', ('CARBON_SOURCE','EX00031')),
-    ('Oxygen', ('DIFFUSION_2','EX00007')),
-    ('CO2', ('DIFFUSION_3','EX00011')),
-    ('Water', ('DIFFUSION_1','EX00001')),
-    ('Orthophosphate', ('DIFFUSION_6','EX00009')),
-    ('Bicarb', ('DIFFUSION_8','EX00288'))
+# # #  Pathway analysis
+pathways_for_analysis = [
+    ('Fundamental imports', [
+        ('Glucose', ('CARBON_SOURCE','EX00031')),
+        ('Oxygen', ('DIFFUSION_2','EX00007'), -1),
+        ('CO2', ('DIFFUSION_3','EX00011'), -1),
+        ('Water', ('DIFFUSION_1','EX00001'), -1),
+        ('Phosphate', ('DIFFUSION_6','EX00009'), -1),
+        ('Bicarb', ('DIFFUSION_8','EX00288'))
+    ]),
+    ('TCA cycle', [
+        ('oaa -> cit', ('R00351',), -1),
+        ('cit -> icit 1a', ('R01325',)),
+        ('cit -> icit 1b', ('R01900',), -1),
+        ('icit -> akg NADPH', ('R00267',)),
+        ('icit -> akg NADH', ('R00709',)),
+        ('akg -> succoa', ('R02570',), -1),
+        ('succoa -> succ', ('R00405',), -1),
+        ('succ -> fum', ('R02164',)),
+        ('fum -> mal', ('R01082',), -1),
+        ('mal -> oaa', ('R00342',))
+    ]),
+    ('Oxidative phosphorylation', [
+        ('Complex I', ('R02163',), -1),
+        ('Complex II', ('R02164',)),
+        ('Complex III', ('R02161',)),
+        ('Complex IV', ('R00081',)),
+        ('ATP synthase', ('R00086',), -1),
+        ('C II reverse', ('R01867',)),
+        ('d-oro -> UQH2', ('R01868',))
+    ])
 ]
+# ('Non-growth', ('NGAM',))
+
+# # #  Program objects
 test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
@@ -333,7 +374,7 @@ if fva_analysis:
     m2_fva = cobra.flux_analysis.flux_variability_analysis(m2)
     visualize_fva_reactions(m1_fva, (min_flux, max_flux), colour_range, m1_viz_str)
     visualize_fva_reactions(m2_fva, (min_flux, max_flux), colour_range, m2_viz_str)
-    notable_fluxes((m1, m2), (m1_fva, m2_fva), notable_reactions)
+    pathway_analysis((m1, m2), (m1_fva, m2_fva), pathways_for_analysis)
 
 
 
