@@ -260,33 +260,36 @@ def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max
 
 def pathway_analysis(models, fvas, pathways):
     range_str = '%i to %i'
-    desc_str = '\nModel fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
+    desc_str = '\nFluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
     print(desc_str)
-    print('-' * len(desc_str))
-    for path_desc, rxn_ids in pathways:
-        max_name_len = 0
+    print('-' * len(desc_str.strip()))
+    for path_desc, rxn_ids in pathways: # for each pathway:
+        max_name_len, val_lens = 0, [0]*len(fvas)
         buff = []
-        for rxn_data in rxn_ids:
+        for rxn_data in rxn_ids: # for each reaction in the pathway:
             name, r_ids = rxn_data[:2]
             rxn_coef = 1.0
             if len(rxn_data) == 3:
                 rxn_coef *= rxn_data[2]
             if len(name) > max_name_len:
                 max_name_len = len(name)
-            vals = []
-            for fva in fvas:
-                for r_id in r_ids:
+            vals = [name+':']
+            for i, fva in enumerate(fvas): # for each model:
+                for r_id in r_ids: # one of these IDs should be in that model.
                     data = fva.get(r_id, None)
                     if data != None:
                         min_max = (int(round(data['minimum'])), int(round(data['maximum'])))
                         if rxn_coef < 0:
                             min_max = (int(round(min_max[1]*rxn_coef)), int(round(min_max[0]*rxn_coef)))
-                        vals.append(range_str % min_max)
+                        val_str = range_str % min_max
                         break
-                else:
-                    vals.append('N/A')
-            buff.append( (name+':', ' | '.join(vals)) )
-        value_str = '%%-%is %%s' % (max_name_len+1)
+                else: # none of the reaction IDs were found in the model.
+                    val_str = 'N/A'
+                if len(val_str) > val_lens[i]:
+                    val_lens[i] = len(val_str)
+                vals.append(val_str)
+            buff.append(tuple(vals))
+        value_str = '%%-%is %s' % (max_name_len+1, ' | '.join('%%%is' % l for l in val_lens))
         pathway_values = '\n'.join(value_str % v for v in buff)
         print('\t%s:\n%s\n' % (path_desc, pathway_values))
 
@@ -295,15 +298,13 @@ def pathway_analysis(models, fvas, pathways):
 min_flux = -1000
 max_flux = 1000
 min_colour = '#ff0000'
-zero_colour = '#ffff00' # '#99ffff' # '#b3ffff' is similar, a little lighter.
+zero_colour = '#ffff00'
 max_colour = '#00ff00'
 colour_range = (min_colour, zero_colour, max_colour)
 
 # # #  Run-time options
-model_file_1 = 'model_o_vol.xlsx'
-model_file_2 = 'model_o_vol_2.xlsx'
-m1_viz_str = model_file_1.rpartition('.')[0] + '_%s.txt' # 'model_o_vol_%s.txt'
-m2_viz_str = model_file_2.rpartition('.')[0] + '_%s.txt' # 'model_b_mal_%s.txt'
+model_files = ['model_o_vol_2.xlsx', 'model_b_mal_2.xlsx']
+viz_strs = [m_file.rpartition('.')[0]+'_%s.txt' for m_file in model_files]
 verbose = True
 topology_analysis = False
 fba_analysis = False
@@ -348,43 +349,35 @@ test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 # # #  Run steps
-m1 = read_excel(model_file_1, verbose=verbose)
-m2 = read_excel(model_file_2, verbose=verbose)
-m1.optimize()
-m2.optimize()
+models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
+for m in models:
+    m.optimize()
 
 if topology_analysis:
-    basic_stats(m1)
-    basic_stats(m2)
-    compare_models(m1, m2)
+    for m in models:
+        basic_stats(m)
+    # # compare_models(m1, m2)
 
 if verbose:
-    m1.summary()
-    m2.summary()
+    for m in models:
+        print('\n%s summary:' % m)
+        m.summary()
 
 if fba_analysis:
-    compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
-    analyze_shadows(m1, 20)
-    analyze_shadows(m2, 20)
-    visualize_fba_reactions(m1, (min_flux, max_flux), colour_range, to_file_str=m1_viz_str)
-    visualize_fba_reactions(m2, (min_flux, max_flux), colour_range, to_file_str=m2_viz_str)
+    for m, viz_str in zip(models, viz_strs):
+        analyze_shadows(m, 20)
+        visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
+    # # compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
 
+fvas = []
 if fva_analysis:
-    m1_fva = cobra.flux_analysis.flux_variability_analysis(m1)
-    m2_fva = cobra.flux_analysis.flux_variability_analysis(m2)
-    visualize_fva_reactions(m1_fva, (min_flux, max_flux), colour_range, m1_viz_str)
-    visualize_fva_reactions(m2_fva, (min_flux, max_flux), colour_range, m2_viz_str)
-    pathway_analysis((m1, m2), (m1_fva, m2_fva), pathways_for_analysis)
+    for m, viz_str in zip(models, viz_strs):
+        m_fva = cobra.flux_analysis.flux_variability_analysis(m)
+        visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
+        fvas.append(m_fva)
+    pathway_analysis(models, fvas, pathways_for_analysis)
 
 
-
-
-
-# Compare constraints between the models.
-# Add method to save model as excel file.
-# In topology, compare exchange / intake / sink reactions.
-# Do the same after optimization, to compare preferred nutrient intake pathways.
-# - Definitely do this, to monitor some common/major metabolites.
 
 # Dead-end reactions are quite common in metaNets.
 #  - Could iterate over metabolites, adding sink or transport reactions. See which have an impact on the f.
