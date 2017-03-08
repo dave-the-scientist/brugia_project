@@ -177,6 +177,17 @@ def analyze_shadows(model, num):
     pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
     print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
+def assess_metabolites_impact(model, mtbs):
+    m = model.copy()
+    orig_obj = model.solution.f
+    no_diff = []
+    for mtb in mtbs:
+        # make new reaction, free import/export.
+        # add to model, parsimoniously optimize.
+        # if difference, report it and flux through rxn. othereise append to no_diff
+        pass
+
+
 def visualize_fba_reactions(model, flux_range, colour_range, to_file_str=None):
     data = [(r.id, r.x) for r in model.reactions]
     data.sort(key=lambda r: r[0])
@@ -307,7 +318,7 @@ model_files = ['model_o_vol_2.xlsx', 'model_b_mal_2.xlsx']
 viz_strs = [m_file.rpartition('.')[0]+'_%s.txt' for m_file in model_files]
 verbose = True
 topology_analysis = False
-fba_analysis = False
+fba_analysis = True
 fva_analysis = True
 
 # # #  Pathway analysis
@@ -351,7 +362,8 @@ test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in 
 # # #  Run steps
 models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
 for m in models:
-    m.optimize()
+    cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
+    # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
 
 if topology_analysis:
     for m in models:
@@ -376,6 +388,14 @@ if fva_analysis:
         visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
         fvas.append(m_fva)
     pathway_analysis(models, fvas, pathways_for_analysis)
+
+# loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
+#  - optimize() took x time.
+#  - Running fva on this model is slow; hadn't completed after 2 hours. Might take 5 hours, should be less than 30.
+#  - Better idea is do fva on regular model, remove all reactions with no flux, find loopless model, run fva.
+# cobra.flux_analysis.parsimonious.optimize_minimal_flux(model)
+#  - Does FBA, then finds solution that also minimizes total flux in the system. Returns nothing.
+# essential_transports = cobra.flux_analysis.essentiality.assess_medium_component_essentiality(model, the_components=[], solver='cglpk')
 
 
 
