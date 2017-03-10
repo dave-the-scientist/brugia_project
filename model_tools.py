@@ -7,7 +7,7 @@ mtb.reactions: all of the reactions that produce or consume mtb.
 mtb.summary(): rates mtb is being produced and used in the current FBA.
 model.metabolites.C00042 is the mtb object for succinate.
 model.reactions.R02146.x is the flux through the reaction in the current FBA state.
-model.reactions.R02146.reaction is a human-readable description.
+model.reactions.R02146.reaction is a human-readable description. test.
 """
 from math import sqrt
 import cobra
