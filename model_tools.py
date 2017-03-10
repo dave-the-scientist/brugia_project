@@ -7,10 +7,10 @@ mtb.reactions: all of the reactions that produce or consume mtb.
 mtb.summary(): rates mtb is being produced and used in the current FBA.
 model.metabolites.C00042 is the mtb object for succinate.
 model.reactions.R02146.x is the flux through the reaction in the current FBA state.
-model.reactions.R02146.reaction is a human-readable description. test.
+model.reactions.R02146.reaction is a human-readable description.
 """
 from math import sqrt
-import cobra
+import os, cobra
 from read_excel import read_excel
 
 
@@ -354,6 +354,7 @@ max_colour = '#00ff00'
 colour_range = (min_colour, zero_colour, max_colour)
 
 # # #  Run-time options
+files_dir = '/mnt/hgfs/win_projects/brugia_project'
 model_files = ['model_o_vol_2.xlsx', 'model_b_mal_2.xlsx']
 viz_strs = [m_file.rpartition('.')[0]+'_%s.txt' for m_file in model_files]
 verbose = True
@@ -400,7 +401,7 @@ test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 # # #  Run steps
-models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
+models = [read_excel(os.path.join(files_dir, m_file), verbose=verbose) for m_file in model_files]
 for m in models:
     cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
     # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
@@ -429,7 +430,7 @@ if fva_analysis:
         fvas.append(m_fva)
     pathway_analysis(models, fvas, pathways_for_analysis)
 
-assess_metabolites_impact(models[0], models[0].metabolites)
+#assess_metabolites_impact(models[0], models[0].metabolites)
 
 # loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
 #  - optimize() hadn't completed after 40 hours.
