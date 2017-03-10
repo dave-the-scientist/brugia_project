@@ -171,21 +171,61 @@ def analyze_shadows(model, num):
         if c.id in obj_c_ids: continue
         mtbs_shs.append(c)
     mtbs_shs.sort(key=lambda c: c.y)
+
+    m = model.copy()
+    orig_f = m.optimize().f
+
     print('\nShadow prices for %s.' % model)
+
     neg_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:num]]
     print('Negative (high value):\n%s' % ('\n'.join(neg_shs)))
+
+    #print('High value [ID ShadowPrice ObjDiff ImportFlux]:')
+    #for mtb in mtbs_shs[:num]:
+    #    new_f, imp_flx = single_metabolite_import_impact(m, mtb)
+    #    print('\t%s %i %.1f %.1f' % (mtb.id, mtb.y, new_f-orig_f, imp_flx))
+
     pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
     print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
 def assess_metabolites_impact(model, mtbs):
+    # for each never-produced mtb, should also test an export for each never-used mtb. In another function.
     m = model.copy()
-    orig_obj = model.solution.f
-    no_diff = []
+    orig_f = model.solution.f
+    diffs = []
     for mtb in mtbs:
-        # make new reaction, free import/export.
-        # add to model, parsimoniously optimize.
-        # if difference, report it and flux through rxn. othereise append to no_diff
-        pass
+        new_f, rxn_f = single_metabolite_import_impact(m, mtb)
+        diff_f = new_f - orig_f
+        if diff_f > 1.0:
+            diffs.append((diff_f, rxn_f, mtb.id, mtb.name))
+    diffs.sort(key=lambda d: -d[0])
+    for d in diffs:
+        print('Delta: %i Flux: %i (%s) %s' % d)
+    print('%i reactions improved the objective function.' % len(diffs))
+
+def single_metabolite_import_impact(model, mtb):
+    """Adds a reversible reaction to import and runs pFBA. Returns the new
+    objective flux and the flux through the import reaction. Removes the import
+    reaction before return.
+    """
+    rxn_id = 'TEST_IMPORT_REACTION'
+    if rxn_id in model.reactions:
+        i = 1
+        while '%s_%i' % (rxn_id, i) in model.reactions:
+            i += 1
+        rxn_id = '%s_%i' % (rxn_id, i)
+    rxn = cobra.Reaction(rxn_id)
+    rxn.lower_bound = -1000
+    rxn.upper_bound = 1000
+    rxn.objective_coeficient = 0
+    if isinstance(mtb, str):
+        mtb = model.metabolites.get_by_id(mtb)
+    rxn.add_metabolites({mtb: 1.0})
+    model.add_reaction(rxn)
+    obj_f = cobra.flux_analysis.parsimonious.optimize_minimal_flux(model).f
+    rxn_f = rxn.x
+    model.remove_reactions([rxn])
+    return obj_f, rxn_f
 
 
 def visualize_fba_reactions(model, flux_range, colour_range, to_file_str=None):
@@ -389,9 +429,11 @@ if fva_analysis:
         fvas.append(m_fva)
     pathway_analysis(models, fvas, pathways_for_analysis)
 
+assess_metabolites_impact(models[0], models[0].metabolites)
+
 # loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
-#  - optimize() took x time.
-#  - Running fva on this model is slow; hadn't completed after 2 hours. Might take 5 hours, should be less than 30.
+#  - optimize() hadn't completed after 40 hours.
+#  - Running fva on this model is slow; hadn't completed after 40 hours.
 #  - Better idea is do fva on regular model, remove all reactions with no flux, find loopless model, run fva.
 # cobra.flux_analysis.parsimonious.optimize_minimal_flux(model)
 #  - Does FBA, then finds solution that also minimizes total flux in the system. Returns nothing.
