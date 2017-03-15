@@ -11,7 +11,7 @@ model.reactions.R02146.reaction is a human-readable description.
 """
 from math import sqrt
 import os, cobra
-from read_excel import read_excel
+from read_excel import read_excel, write_excel
 
 
 def basic_stats(model):
@@ -344,6 +344,57 @@ def pathway_analysis(models, fvas, pathways):
         pathway_values = '\n'.join(value_str % v for v in buff)
         print('\t%s:\n%s\n' % (path_desc, pathway_values))
 
+def compare_reaction_mtbs(model1, model2, missing_mtb, outfile):
+    rxn_mtbs = set()
+    exchanges, transports = set(), set()
+    for rxn in model1.reactions:
+        rs = tuple(sorted(m.id.strip()[1:] for m in rxn.reactants))
+        ps = tuple(sorted(m.id.strip()[1:] for m in rxn.products))
+        if any(m[0].isalpha() for m in rs+ps): # Using a custom metabolite.
+            continue
+        if rs == ps:
+            transports.add(rs)
+        elif not rs:
+            exchanges.add(ps)
+        elif not ps:
+            exchanges.add(rs)
+        else:
+            rxn_mtbs.add((rs, ps))
+    print('\nParsed %i reactions, %i transports, and %i exchanges.' % (len(rxn_mtbs), len(transports), len(exchanges)))
+    missed_exs = set()
+    bad_ids = set()
+    missing_mtb_ids = set()
+    for rxn in model2.reactions:
+        rs = tuple(sorted(m.id.strip()[1:] for m in rxn.reactants))
+        ps = tuple(sorted(m.id.strip()[1:] for m in rxn.products))
+        if not rs or not ps:
+            ms = rs if rs else ps
+            if ms not in exchanges:
+                missed_exs.add(ms)
+        else:
+            if (rs, ps) in rxn_mtbs or (ps, rs) in rxn_mtbs:
+                pass
+            else:
+                coef = check_rxn_missing_mtb(missing_mtb, rs, ps, rxn_mtbs)
+                if coef:
+                    missing_mtb_ids.add(rxn.id)
+                    rxn.add_metabolites({missing_mtb: coef})
+                else:
+                    bad_ids.add(rxn.id)
+    print('%s is missing %i exchanges present in %s, with %i inconsistencies.' % (model2, len(missed_exs), model1, len(bad_ids)))
+    write_excel(model2, outfile)
+    print('%i reactions were missing %s; modified and saved as %s' % (len(missing_mtb_ids), missing_mtb, outfile))
+def check_rxn_missing_mtb(mtb, rs, ps, rxn_mtbs):
+    rs_h = tuple(sorted(rs + (mtb[1:],)))
+    ps_h = tuple(sorted(ps + (mtb[1:],)))
+    if (rs_h, ps) in rxn_mtbs or (ps, rs_h) in rxn_mtbs:
+        return -1.0 # mtb should be a reactant
+    elif (rs, ps_h) in rxn_mtbs or (ps_h, rs) in rxn_mtbs:
+        return 1.0 # mtb should be a product
+    else:
+        return 0 # neither reaction modification found
+
+
 
 # # #  Parameters
 min_flux = -1000
@@ -355,12 +406,14 @@ colour_range = (min_colour, zero_colour, max_colour)
 
 # # #  Run-time options
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
-model_files = ['model_o_vol_2.xlsx', 'model_b_mal_2.xlsx']
-viz_strs = [m_file.rpartition('.')[0]+'_%s.txt' for m_file in model_files]
+model_files = ['model_o_vol_2.5.xlsx', 'model_b_mal_2.5.xlsx', 'model_o_vol_3.xlsx']
+mtb_cmp_str = '%s_wip.xlsx'
 verbose = True
 topology_analysis = False
-fba_analysis = True
+fba_analysis = False
 fva_analysis = True
+save_visualizations = False
+do_reaction_mtb_comparison = None # 'C00080', or None
 
 # # #  Pathway analysis
 pathways_for_analysis = [
@@ -401,7 +454,27 @@ test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845
 test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 # # #  Run steps
-models = [read_excel(os.path.join(files_dir, m_file), verbose=verbose) for m_file in model_files]
+cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
+cel_m.reactions.BIO0103.objective_coefficient = 1.0 # # #  TESTING ONLY
+
+model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
+models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
+
+if do_reaction_mtb_comparison:
+    new_model_files, new_models = [], []
+    cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
+    cel_m.reactions.BIO0103.objective_coefficient = 1.0
+    for m_file, model in zip(model_files, models):
+        mtb_outfile = mtb_cmp_str % m_file.rpartition('.')[0]
+        m = model.copy()
+        compare_reaction_mtbs(cel_m, m, do_reaction_mtb_comparison, mtb_outfile)
+        new_model_files.append(mtb_outfile)
+        new_models.append(read_excel(mtb_outfile))
+    model_files += new_model_files
+    models += new_models
+
+viz_strs = [os.path.split(m_file.rpartition('.')[0]+'_%s.txt')[1] for m_file in model_files]
+
 for m in models:
     cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
     # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
@@ -418,19 +491,26 @@ if verbose:
 
 if fba_analysis:
     for m, viz_str in zip(models, viz_strs):
-        analyze_shadows(m, 20)
-        visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
+        analyze_shadows(m, 5)
+        if save_visualizations:
+            visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
     # # compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
 
 fvas = []
 if fva_analysis:
     for m, viz_str in zip(models, viz_strs):
         m_fva = cobra.flux_analysis.flux_variability_analysis(m)
-        visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
         fvas.append(m_fva)
+        if save_visualizations:
+            visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
     pathway_analysis(models, fvas, pathways_for_analysis)
 
 #assess_metabolites_impact(models[0], models[0].metabolites)
+
+
+# Add pyruvate (C00022) to pathway analysis.
+#  - Can go into TCA, anaerobic respiration, produce glucose or other carbs, produce fatty acids, produce alanine, etc.
+#  - Monitor these.
 
 # loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
 #  - optimize() hadn't completed after 40 hours.
@@ -439,8 +519,6 @@ if fva_analysis:
 # cobra.flux_analysis.parsimonious.optimize_minimal_flux(model)
 #  - Does FBA, then finds solution that also minimizes total flux in the system. Returns nothing.
 # essential_transports = cobra.flux_analysis.essentiality.assess_medium_component_essentiality(model, the_components=[], solver='cglpk')
-
-
 
 # Dead-end reactions are quite common in metaNets.
 #  - Could iterate over metabolites, adding sink or transport reactions. See which have an impact on the f.
