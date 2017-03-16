@@ -328,6 +328,8 @@ def pathway_analysis(models, fvas, pathways):
             for i, fva in enumerate(fvas): # for each model:
                 for r_id in r_ids: # one of these IDs should be in that model.
                     data = fva.get(r_id, None)
+                    if data == None:
+                        data = fva.get(r_id[:-2], None)
                     if data != None:
                         min_max = (int(round(data['minimum'])), int(round(data['maximum'])))
                         if rxn_coef < 0:
@@ -394,6 +396,9 @@ def check_rxn_missing_mtb(mtb, rs, ps, rxn_mtbs):
     else:
         return 0 # neither reaction modification found
 
+def test_compartment_transports(model):
+    # For every mtb, add free cyto-mito transport. see which improve objective.
+    pass
 
 
 # # #  Parameters
@@ -423,26 +428,27 @@ pathways_for_analysis = [
         ('CO2', ('DIFFUSION_3','EX00011'), -1),
         ('Water', ('DIFFUSION_1','EX00001'), -1),
         ('Phosphate', ('DIFFUSION_6','EX00009'), -1),
-        ('Bicarb', ('DIFFUSION_8','EX00288'))
+        ('Bicarb', ('DIFFUSION_8','EX00288')),
+        ('Ammonia', ('DIFFUSION_4', 'EX00014'))
     ]),
     ('TCA cycle', [
-        ('oaa -> cit', ('R00351',), -1),
-        ('cit -> icit 1a', ('R01325',)),
-        ('cit -> icit 1b', ('R01900',), -1),
-        ('icit -> akg NADPH', ('R00267',)),
-        ('icit -> akg NADH', ('R00709',)),
-        ('akg -> succoa', ('R02570',), -1),
-        ('succoa -> succ', ('R00405',), -1),
-        ('succ -> fum', ('R02164',)),
-        ('fum -> mal', ('R01082',), -1),
-        ('mal -> oaa', ('R00342',))
+        ('oaa -> cit', ('R00351_M',), -1),
+        ('cit -> icit 1a', ('R01325_M',)),
+        ('cit -> icit 1b', ('R01900_M',), -1),
+        ('icit -> akg NADPH', ('R00267_M',)),
+        ('icit -> akg NADH', ('R00709_M',)),
+        ('akg -> succoa', ('R02570_M',), -1),
+        ('succoa -> succ', ('R00405_M',), -1),
+        ('succ -> fum', ('R02164_M',)),
+        ('fum -> mal', ('R01082_M',), -1),
+        ('mal -> oaa', ('R00342_M',))
     ]),
     ('Oxidative phosphorylation', [
-        ('Complex I', ('R02163',), -1),
-        ('Complex II', ('R02164',)),
-        ('Complex III', ('R02161',)),
-        ('Complex IV', ('R00081',)),
-        ('ATP synthase', ('R00086',), -1),
+        ('Complex I', ('R02163_M',), -1),
+        ('Complex II', ('R02164_M',)),
+        ('Complex III', ('R02161_M',)),
+        ('Complex IV', ('R00081_M',)),
+        ('ATP synthase', ('R00086_M',), -1),
         ('C II reverse', ('R01867',)),
         ('d-oro -> UQH2', ('R01868',))
     ])
@@ -455,7 +461,9 @@ test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in 
 
 # # #  Run steps
 cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
-cel_m.reactions.BIO0103.objective_coefficient = 1.0 # # #  TESTING ONLY
+cel_m.reactions.BIO0101.objective_coefficient = 1.0 # # #  TESTING ONLY
+cobra.flux_analysis.parsimonious.optimize_minimal_flux(cel_m)
+#cel_fva = cobra.flux_analysis.flux_variability_analysis(cel_m)
 
 model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
 models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
