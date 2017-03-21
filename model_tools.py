@@ -43,8 +43,14 @@ def topology_analysis(model):
         if verbose:
             unused_mtb_str += '\n\t%s' % (' '.join(not_used))
     print('\nUnused metabolites: %s' % unused_mtb_str)
-def get_metab_outliers(model):
-    mtbs, blocked = get_metabolite_reactions(model)
+def get_metab_outliers(model, only_these=set()):
+    """not_gen and not_used are those mtbs that cannot be produced or consumed by
+    any reactions in the model, respectively. Doesn't check if they are, only if
+    they have the potential to be. Blocked is a list of reaction ids, and sprfls
+    is a list of metabolites that are listed in the models, but never used by any
+    reaction. only_these is a set of reaction ids; if empty, all reactions in the
+    model are analyzed."""
+    mtbs, blocked = get_metabolite_reactions(model, only_these)
     sprfls = list(set(m.id for m in model.metabolites) - set(mtbs.keys()))
     not_gen, not_used = [], []
     for mtb, data in mtbs.items():
@@ -54,10 +60,12 @@ def get_metab_outliers(model):
             not_used.append(mtb)
     not_gen.sort(); not_used.sort(); blocked.sort(); sprfls.sort()
     return not_gen, not_used, blocked, sprfls
-def get_metabolite_reactions(model):
+def get_metabolite_reactions(model, only_these=set()):
     mtbs, blocked = {}, []
     for rxn in model.reactions:
         r_id = rxn.id
+        if only_these and r_id not in only_these:
+            continue
         forward = True if rxn.upper_bound > 0 else False
         reverse = True if rxn.lower_bound < 0 else False
         if forward == reverse == False:
@@ -430,7 +438,7 @@ colour_range = (min_colour, zero_colour, max_colour)
 
 # # #  Run-time options
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
-model_files = ['model_o_vol_2.5.xlsx', 'model_b_mal_2.5.xlsx', 'model_o_vol_3.xlsx', 'model_b_mal_3.xlsx']
+model_files = ['model_o_vol_3.xlsx', 'model_b_mal_3.xlsx', 'model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 mtb_cmp_str = '%s_wip.xlsx'
 verbose = True
 topology_analysis = False
@@ -483,7 +491,7 @@ test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in 
 
 
 # # #  Run steps
-#cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
+cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
 #cel_m.reactions.BIO0101.objective_coefficient = 1.0 # # #  TESTING ONLY
 #cobra.flux_analysis.parsimonious.optimize_minimal_flux(cel_m)
 #cel_fva = cobra.flux_analysis.flux_variability_analysis(cel_m)

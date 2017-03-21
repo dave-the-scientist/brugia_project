@@ -26,13 +26,12 @@ RXN_LB_KEYS = {"lb", "lower bound", "lower bounds"}
 RXN_UB_KEYS = {"ub", "upper bound", "upper bounds"}
 RXN_OBJ_KEYS = {"objective"}
 RXN_SUBS_KEYS = {"subsystem", "pathway"}
-
-# defaults if no lower/upper bound
 RXN_ECS_KEYS = {"ec number", "enzyme"}
 RXN_GENES_KEYS = {"genes"}
 RXN_PROTS_KEYS = {"proteins"}
 RXN_NOTES_KEYS = {"notes", "comments"}
 RXN_CONFD_KEYS = {"confidence score"}
+RXN_KEGG_KEYS = {"kegg"}
 
 
 def escape_str(potential_str):
@@ -93,6 +92,7 @@ def read_excel(
         rxn_proteins_key=None,
         rxn_confidence_key=None,
         rxn_notes_key=None,
+        rxn_kegg_key=None,
 
         met_sheet_name=None,
         met_sheet_header=0,
@@ -226,6 +226,10 @@ def read_excel(
         rxn_notes_key = guess_name(rxn_frame.keys(), RXN_NOTES_KEYS, fail=False)
         if verbose and rxn_notes_key is None:
             print("reaction notes column not identified")
+    if rxn_kegg_key is None:
+        rxn_kegg_key = guess_name(rxn_frame.keys(), RXN_KEGG_KEYS, fail=False)
+        if verbose and rxn_kegg_key is None:
+            print("reaction notes column not identified")
 
     for i in range(len(rxn_frame)):
         row = rxn_frame.ix[i]
@@ -266,6 +270,8 @@ def read_excel(
             rxn.confidence_notes = extract(row, rxn_confidence_key)
         if rxn_notes_key is not None:
             rxn.reaction_notes = extract(row, rxn_notes_key)
+        if rxn_kegg_key is not None:
+            rxn.kegg_reaction = extract(row, rxn_kegg_key)
         m.add_reaction(rxn)
 
         # Now build the reaction from the string
