@@ -1,7 +1,7 @@
 import os, cobra
 from read_excel import read_excel, write_excel
 
-def modify_model(model, cel_m):
+def modify_model(model, cel_m, do_deletions=True):
     rxns_to_add, custom_rxns = {}, {}
     for rxn in cel_m.reactions:
         r_id = rxn.id
@@ -15,17 +15,21 @@ def modify_model(model, cel_m):
         else:
             continue
     cyto_mod, cyto_rm = 0, 0
-    missing_mito = {}
+    missing_mito, rxns_to_delete = {}, []
     for kegg, rxns in rxns_to_add.items():
         if len(rxns) != 1:
             print('Multiple M reactions for id %s' % (kegg))
             continue
         if kegg in model.reactions: # a cyto version already exists.
-            if copy_cyto_to_mito(kegg, model, rxns[0]):
+            cyto_rxn = model.reactions.get_by_id(kegg)
+            if copy_cyto_to_mito(kegg, model, cyto_rxn, rxns[0]):
                 cyto_mod += 1
                 if 'RC' + kegg[1:] not in cel_m.reactions: # cyto version shouldn't exist.
-                    model.reactions.get_by_id(kegg).delete()
-                    cyto_rm += 1
+                    if do_deletions:
+                        cyto_rxn.delete()
+                        cyto_rm += 1
+                    else:
+                        rxns_to_delete.append(cyto_rxn)
             else:
                 pass # cyto version already correct (generally exchange transports).
         else: # cyto version doesn't exist
@@ -36,6 +40,7 @@ def modify_model(model, cel_m):
     cust_ids = sorted(cid for cid in custom_rxns)
     print('\n%i custom reactions:\n%s' % (len(cust_ids), ','.join(cust_ids)))
     print('\n%s: %i modified and %i added a dual form; %i missing.\n' % (model, cyto_rm, cyto_mod-cyto_rm, len(missing_mito)))
+    return rxns_to_delete
 
 def parse_unadded_keggs(rxn, suffix, model):
     keggs = []
@@ -46,10 +51,8 @@ def parse_unadded_keggs(rxn, suffix, model):
         if kegg + suffix not in model.reactions:
             keggs.append(kegg)
     return keggs
-def copy_cyto_to_mito(kegg, model, cel_rxn):
-    #rxn.id # modify
+def copy_cyto_to_mito(kegg, model, cyto_rxn, cel_rxn):
     new_id = kegg + '_M'
-    cyto_rxn = model.reactions.get_by_id(kegg)
     if cyto_rxn.reaction == cel_rxn.reaction:
         return False
     rxn = cobra.Reaction(new_id)
@@ -58,6 +61,7 @@ def copy_cyto_to_mito(kegg, model, cel_rxn):
     rxn.subsystem = cyto_rxn.subsystem
     rxn.enzyme_commission = cyto_rxn.enzyme_commission
     rxn.gene_names = cyto_rxn.gene_names
+    rxn.confidence_notes = cyto_rxn.confidence_notes
     rxn.reaction_notes = cyto_rxn.reaction_notes
     mtb_dict = {}
     for mtb, coef in cyto_rxn.metabolites.items():
@@ -88,10 +92,29 @@ def add_mito_reaction(kegg, suffix, model, cel_rxn):
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
 model_files = ['model_o_vol_3.xlsx', 'model_b_mal_3.xlsx']
 out_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
+do_deletions = True
+
 cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
 #cel_m.reactions.BIO0101.objective_coefficient = 1.0 # # #  TESTING ONLY
 #cobra.flux_analysis.parsimonious.optimize_minimal_flux(cel_m)
 models = [read_excel(os.path.join(files_dir, m_file), verbose=False) for m_file in model_files]
+
 for m, out_file in zip(models, out_files):
-    modify_model(m, cel_m)
-    write_excel(m, os.path.join(files_dir, out_file))
+    if do_deletions:
+        modify_model(m, cel_m, do_deletions)
+        write_excel(m, os.path.join(files_dir, out_file))
+    else:
+        print('Obj before modifications: %.1f' % (m.optimize().f))
+        rxns_to_delete = modify_model(m, cel_m, do_deletions)
+        diffs = []
+        cur_f = m.optimize().f
+        for rxn in rxns_to_delete:
+            rxn.delete()
+            diff_f = m.optimize().f - cur_f
+            diffs.append((diff_f, rxn))
+            cur_f += diff_f
+            if cur_f < 1.0:
+                break
+        diffs.sort()
+        for d in diffs:
+            print('%.1f by %s' % (d[0], d[1].id))

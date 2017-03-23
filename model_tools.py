@@ -452,6 +452,7 @@ test_nutrient_imports = False
 pathways_for_analysis = [
     ('Fundamental imports', [
         ('Glucose', ('CARBON_SOURCE','EX00031')),
+        ('Fatty acids', ('FA_SOURCE',)),
         ('Oxygen', ('DIFFUSION_2','EX00007'), -1),
         ('CO2', ('DIFFUSION_3','EX00011'), -1),
         ('Water', ('DIFFUSION_1','EX00001'), -1),
@@ -491,7 +492,7 @@ test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in 
 
 
 # # #  Run steps
-cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
+#cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
 #cel_m.reactions.BIO0101.objective_coefficient = 1.0 # # #  TESTING ONLY
 #cobra.flux_analysis.parsimonious.optimize_minimal_flux(cel_m)
 #cel_fva = cobra.flux_analysis.flux_variability_analysis(cel_m)
