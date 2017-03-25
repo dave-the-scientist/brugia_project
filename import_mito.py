@@ -3,6 +3,7 @@ from read_excel import read_excel, write_excel
 
 def modify_model(model, cel_m, do_deletions=True):
     rxns_to_add, custom_rxns = {}, {}
+    rxns_in_cust_cyto = set()
     for rxn in cel_m.reactions:
         r_id = rxn.id
         if r_id.startswith('RMC'):
@@ -12,6 +13,10 @@ def modify_model(model, cel_m, do_deletions=True):
             keggs = parse_unadded_keggs(rxn, '_M', model)
             for kegg in keggs:
                 rxns_to_add.setdefault(kegg, []).append(rxn)
+        elif r_id.startswith('RCC'):
+            keggs = parse_unadded_keggs(rxn, '__ALL', model) # returns all subreactions that are part of this cyto custom reaction.
+            for kegg in keggs:
+                rxns_in_cust_cyto.add(kegg)
         else:
             continue
     cyto_mod, cyto_rm = 0, 0
@@ -24,7 +29,7 @@ def modify_model(model, cel_m, do_deletions=True):
             cyto_rxn = model.reactions.get_by_id(kegg)
             if copy_cyto_to_mito(kegg, model, cyto_rxn, rxns[0]):
                 cyto_mod += 1
-                if 'RC' + kegg[1:] not in cel_m.reactions: # cyto version shouldn't exist.
+                if 'RC' + kegg[1:] not in cel_m.reactions and kegg not in rxns_in_cust_cyto: # cyto version shouldn't exist.
                     if do_deletions:
                         cyto_rxn.delete()
                         cyto_rm += 1
