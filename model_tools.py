@@ -318,13 +318,13 @@ def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max
     return '\n'.join(buff)
 
 def pathway_analysis(models, fvas, pathways):
-    range_str = '%i to %i'
-    desc_str = '\nFluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
-    print(desc_str)
-    print('-' * len(desc_str.strip()))
+    range_str, no_range_str = '%i/%i %i', '%i'
+    desc_str = 'Fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
+    desc_str_underline = '-' * min(len(desc_str.strip()), 80)
+    buff = ['\n%s\n%s' % (desc_str, desc_str_underline)]
     for path_desc, rxn_ids in pathways: # for each pathway:
         max_name_len, val_lens = 0, [0]*len(fvas)
-        buff = []
+        path_buff = []
         for rxn_data in rxn_ids: # for each reaction in the pathway:
             name, r_ids = rxn_data[:2]
             rxn_coef = 1.0
@@ -333,26 +333,32 @@ def pathway_analysis(models, fvas, pathways):
             if len(name) > max_name_len:
                 max_name_len = len(name)
             vals = [name+':']
-            for i, fva in enumerate(fvas): # for each model:
+            for i, (model, fva) in enumerate(zip(models, fvas)): # for each model:
                 for r_id in r_ids: # one of these IDs should be in that model.
-                    data = fva.get(r_id, None)
-                    if data == None:
-                        data = fva.get(r_id[:-2], None)
-                    if data != None:
-                        min_max = (int(round(data['minimum'])), int(round(data['maximum'])))
+                    fva_data = fva.get(r_id, None)
+                    if fva_data == None:
+                        r_id = r_id[:-2]
+                        fva_data = fva.get(r_id, None)
+                    if fva_data != None:
+                        rxn_f = int(round(model.reactions.get_by_id(r_id).x * rxn_coef))
+                        min_max = (int(round(fva_data['minimum']*rxn_coef)), int(round(fva_data['maximum']*rxn_coef)))
                         if rxn_coef < 0:
-                            min_max = (int(round(min_max[1]*rxn_coef)), int(round(min_max[0]*rxn_coef)))
-                        val_str = range_str % min_max
+                            min_max = (min_max[1], min_max[0])
+                        if min_max[0] == min_max[1]:
+                            val_str = no_range_str % rxn_f
+                        else:
+                            val_str = range_str % (min_max[0], min_max[1], rxn_f)
                         break
                 else: # none of the reaction IDs were found in the model.
                     val_str = 'N/A'
                 if len(val_str) > val_lens[i]:
                     val_lens[i] = len(val_str)
                 vals.append(val_str)
-            buff.append(tuple(vals))
+            path_buff.append(tuple(vals))
         value_str = '%%-%is %s' % (max_name_len+1, ' | '.join('%%%is' % l for l in val_lens))
-        pathway_values = '\n'.join(value_str % v for v in buff)
-        print('\t%s:\n%s\n' % (path_desc, pathway_values))
+        pathway_values = '\n'.join(value_str % v for v in path_buff)
+        buff.append('\t%s:\n%s\n' % (path_desc, pathway_values))
+    print('\n'.join(buff).rstrip())
 
 def compare_reaction_mtbs(model1, model2, missing_mtb, outfile):
     rxn_mtbs = set()
@@ -452,19 +458,21 @@ test_nutrient_imports = False
 pathways_for_analysis = [
     ('Fundamental imports', [
         ('Glucose', ('CARBON_SOURCE','EX00031')),
-        ('Fatty acids', ('FA_SOURCE',)),
+        ('TAGs', ('FA_SOURCE',)),
         ('Oxygen', ('DIFFUSION_2','EX00007'), -1),
         ('CO2', ('DIFFUSION_3','EX00011'), -1),
-        ('Water', ('DIFFUSION_1','EX00001'), -1),
-        ('Ammonia', ('DIFFUSION_4', 'EX00014')),
-        ('Lactate', ('SINK_1',), -1)
+        ('Water', ('DIFFUSION_1','EX00001'), -1)
+    ]),
+    ('Aerobic vs anaerobic', [
+        ('Pyr -> TCA', ('M_TRANS_6',)),
+        ('Pyr -> lactate', ('R00703',), -1),
+        ('PEP -> oaa', ('R00431',), -1)
     ]),
     ('TCA cycle', [
         ('oaa -> cit', ('R00351_M',), -1),
-        ('cit -> icit 1a', ('R01325_M',)),
-        ('cit -> icit 1b', ('R01900_M',), -1),
-        ('icit -> akg NADPH', ('R00267_M',)),
+        ('cit -> icit', ('R01900_M',), -1),
         ('icit -> akg NADH', ('R00709_M',)),
+        ('icit -> akg NADPH', ('R00267_M',)),
         ('akg -> succoa', ('R02570_M',), -1),
         ('succoa -> succ', ('R00405_M',), -1),
         ('succ -> fum', ('R02164_M',)),
@@ -480,11 +488,10 @@ pathways_for_analysis = [
         ('Complex III', ('R02161_M',)),
         ('Complex IV', ('R00081_M',)),
         ('ATP synthase', ('R00086_M',), -1),
-        ('C II reverse', ('R01867',)),
-        ('d-oro -> UQH2', ('R01868',))
+        ('C II reverse', ('R01867',))
     ])
 ]
-# ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
+# ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
 
 # # #  Program objects
 test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
@@ -558,10 +565,7 @@ if test_nutrient_imports:
     for d in diffs:
         print d
 
-# Add pyruvate (C00022) to pathway analysis.
-#  - Can go into TCA, anaerobic respiration, produce glucose or other carbs, produce fatty acids, produce alanine, etc.
-#  - Monitor these.
-# Also add mal-asp and gol3p shuttles.
+
 
 # loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
 #  - optimize() hadn't completed after 40 hours.

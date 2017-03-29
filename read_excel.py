@@ -229,7 +229,7 @@ def read_excel(
     if rxn_kegg_key is None:
         rxn_kegg_key = guess_name(rxn_frame.keys(), RXN_KEGG_KEYS, fail=False)
         if verbose and rxn_kegg_key is None:
-            print("reaction notes column not identified")
+            print("KEGG ID column not identified")
 
     for i in range(len(rxn_frame)):
         row = rxn_frame.ix[i]
