@@ -461,12 +461,15 @@ pathways_for_analysis = [
         ('TAGs', ('FA_SOURCE',)),
         ('Oxygen', ('DIFFUSION_2','EX00007'), -1),
         ('CO2', ('DIFFUSION_3','EX00011'), -1),
-        ('Water', ('DIFFUSION_1','EX00001'), -1)
+        ('Water', ('DIFFUSION_1','EX00001'), -1),
+        ('Acetate', ('SINK_8',), -1),
+        ('Propanoate', ('SINK_13',), -1)
     ]),
     ('Aerobic vs anaerobic', [
         ('Pyr -> TCA', ('M_TRANS_6',)),
+        ('PEP -> oaa', ('R00431',), -1),
         ('Pyr -> lactate', ('R00703',), -1),
-        ('PEP -> oaa', ('R00431',), -1)
+        ('C II reverse', ('RMC0183_M',))
     ]),
     ('TCA cycle', [
         ('oaa -> cit', ('R00351_M',), -1),
@@ -487,8 +490,7 @@ pathways_for_analysis = [
         ('Complex II', ('R02164_M',)),
         ('Complex III', ('R02161_M',)),
         ('Complex IV', ('R00081_M',)),
-        ('ATP synthase', ('R00086_M',), -1),
-        ('C II reverse', ('R01867',))
+        ('ATP synthase', ('R00086_M',), -1)
     ])
 ]
 # ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
