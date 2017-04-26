@@ -452,23 +452,27 @@ fba_analysis = False
 fva_analysis = True
 save_visualizations = False
 do_reaction_mtb_comparison = None # 'C00080', or None
-test_nutrient_imports = False
+test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.
 
 # # #  Pathway analysis
 pathways_for_analysis = [
     ('Fundamental imports', [
         ('Glucose', ('CARBON_SOURCE','EX00031')),
         ('TAGs', ('FA_SOURCE',)),
-        ('Oxygen', ('DIFFUSION_2','EX00007'), -1),
-        ('CO2', ('DIFFUSION_3','EX00011'), -1),
-        ('Water', ('DIFFUSION_1','EX00001'), -1),
-        ('Acetate', ('SINK_8',), -1),
-        ('Propanoate', ('SINK_13',), -1)
+        ('Oxygen', ('DIFFUSION_2','EX00007'), -1)
+    ]),
+    ('Waste exports', [
+        ('CO2', ('DIFFUSION_3','EX00011')),
+        ('Lactate', ('R00703',), -1),
+        ('Succinate', ('SINK_10',)),
+        ('Acetate', ('SINK_8',)),
+        ('Propanoate', ('SINK_13',))
     ]),
     ('Aerobic vs anaerobic', [
-        ('Pyr -> TCA', ('M_TRANS_6',)),
+        ('Pyr -> mito', ('M_TRANS_5',)),
         ('PEP -> oaa', ('R00431',), -1),
-        ('Pyr -> lactate', ('R00703',), -1),
+        ('icit -> glx+suc', ('R00479_M',)),
+        ('C I RQ', ('RMC0184_M',)),
         ('C II reverse', ('RMC0183_M',))
     ]),
     ('TCA cycle', [
@@ -486,6 +490,7 @@ pathways_for_analysis = [
         ('MA shuttle C', ('R00342',), -1),
         ('MA shuttle M', ('R00342_M',)),
         ('Gol3P shuttle', ('R08657',)),
+        ('C I (no H+)', ('RMC0008_M',), -1),
         ('Complex I', ('R02163_M',), -1),
         ('Complex II', ('R02164_M',)),
         ('Complex III', ('R02161_M',)),
@@ -493,7 +498,7 @@ pathways_for_analysis = [
         ('ATP synthase', ('R00086_M',), -1)
     ])
 ]
-# ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
+# ('Water', ('DIFFUSION_1','EX00001'), -1) ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
 
 # # #  Program objects
 test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
@@ -556,18 +561,25 @@ if fva_analysis:
 
 #assess_metabolites_impact(models[0], models[0].metabolites)
 
-if test_nutrient_imports:
+if test_nutrient_combos:
+    desc_str = '\nNutrient imports'
+    print('%s\n%s' % (desc_str, '-' * len(desc_str.strip())))
     m, orig_fva = models[2], fvas[2]
-    bounds_deltas = (0, 50)
+    bounds_deltas = (0, 60)
     rxn_ids = ['NUTRIENTS_%i' % i for i in range(1, 21)]
-    rxn_combs = list(itertools.combinations(rxn_ids, 2))
+    rxn_combs = list(itertools.combinations(rxn_ids, test_nutrient_combos))
     diffs = [test_changed_constraints(r_ids, m, orig_fva, bounds_deltas) for r_ids in rxn_combs]
-    diffs = [d for d in diffs if d]; diffs.sort(key=lambda d: -d[0])
-
+    diffs = [d for d in diffs if d]
+    diffs.sort(key=lambda d: -d[0])
     for d in diffs:
         print d
 
 
+# Nutrient studies
+#  - When testing different nutrient availabilities or quantities.
+#  - One characterization is to identify 'essential' reactions (those with always non-zero min FVA); those that always work in the same direction, and those that switch.
+#  - 'Substitutable' reactions; those that carry flux in some conditions; again those always in the same direction, and those that switch.
+#  - 'Blocked' reactions; those that never carry flux.
 
 # loopless_model = cobra.flux_analysis.loopless.construct_loopless_model(model)
 #  - optimize() hadn't completed after 40 hours.

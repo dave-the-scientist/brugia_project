@@ -93,7 +93,7 @@ def add_mito_reaction(kegg, suffix, model, cel_rxn):
     rxn.build_reaction_from_string(cel_rxn.reaction)
     return True
 
-
+# # #  Options
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
 model_files = ['model_o_vol_3.xlsx', 'model_b_mal_3.xlsx']
 out_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
