@@ -16,6 +16,7 @@ MET_ID_KEYS = {"abbreviation", "abbreviations", "metabolite abbreviation",
     "machine readable id"}
 MET_NAME_KEYS = {"metabolite name", "officialname", "metabolite_name", "description",
     "human readable id"}
+MET_COMPARTMENT_KEYS = {"compartment"}
 MET_FORMULA_KEYS = {"chemical formula", "formula"}
 RXN_ID_KEYS = {"abbreviation", "reaction #", "abbrev",
     "reaction id", "reaction abbreviation", "id"}
@@ -98,6 +99,7 @@ def read_excel(
         met_sheet_header=0,
         met_id_key=None,
         met_name_key=None,
+        met_compartment_key=None,
         met_formula_key=None,
 
         ):
@@ -132,14 +134,16 @@ def read_excel(
         if met_id_key is None:
             met_id_key = guess_name(met_frame.keys(), MET_ID_KEYS)
         if met_name_key is None:
-            met_name_key = guess_name(met_frame.keys(), MET_NAME_KEYS,
-                                      fail=False)
+            met_name_key = guess_name(met_frame.keys(), MET_NAME_KEYS, fail=False)
+        if met_compartment_key is None:
+            met_compartment_key = guess_name(met_frame.keys(), MET_COMPARTMENT_KEYS, fail=False)
         if met_formula_key is None:
-            met_formula_key = guess_name(met_frame.keys(), MET_FORMULA_KEYS,
-                                         fail=False)
+            met_formula_key = guess_name(met_frame.keys(), MET_FORMULA_KEYS, fail=False)
         for i in met_frame.index:
             met_row = met_frame.ix[i]
             met_attributes = {}
+            if met_compartment_key is not None:
+                compartment = extract(met_row, met_compartment_key)
             if met_formula_key is not None:
                 formula = extract(met_row, met_formula_key)
                 if formula is not None and formula.lower() != "None":
@@ -157,7 +161,7 @@ def read_excel(
                 met_name = extract(met_row, met_name_key)
             else:
                 met_name = extract(met_row, met_id_key)
-            met = Metabolite(met_id, name=met_name, **met_attributes)
+            met = Metabolite(met_id, name=met_name, compartment=compartment, **met_attributes)
 
             try:
                 m.add_metabolites(met)
@@ -341,7 +345,7 @@ def write_excel(model, outfile):
         ('EC Number', 'enzyme_commission'), ('Notes', 'reaction_notes')]
     mtb_sheet = 'Metabolite List'
     mtb_headers = [('Abbreviation', 'id'), ('Description', 'name'), ('Neutral formula', ''),
-        ('Charged formula', ''), ('Charge', ''), ('Compartment', ''), ('KEGG ID', ''),
+        ('Charged formula', ''), ('Charge', ''), ('Compartment', 'compartment'), ('KEGG ID', ''),
         ('PubChem ID', ''), ('ChEBI ID', ''), ('InChI string', ''), ('SMILES', ''),
         ('HMDB ID', '')]
     writer = pandas.ExcelWriter(outfile, engine='xlsxwriter')

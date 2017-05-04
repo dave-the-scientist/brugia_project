@@ -14,6 +14,56 @@ import os, itertools, cobra
 from read_excel import read_excel, write_excel
 
 
+# # #  Pathway analysis
+pathways_for_analysis = [
+    ('Fundamental imports', [
+        ('Glucose', ('CARBON_SOURCE','EX00031')),
+        ('TAGs', ('FA_SOURCE',)),
+        ('Oxygen', ('DIFFUSION_2','EX00007'), -1)
+    ]),
+    ('Waste exports', [
+        ('CO2', ('DIFFUSION_3','EX00011')),
+        ('Lactate', ('R00703',), -1),
+        ('Succinate', ('SINK_10',)),
+        ('Acetate', ('SINK_8',)),
+        ('Propanoate', ('SINK_13',))
+    ]),
+    ('Aerobic vs anaerobic', [
+        ('Pyr -> mito', ('M_TRANS_5',)),
+        ('PEP -> oaa', ('R00431',), -1),
+        ('icit -> glx+suc', ('R00479_M',)),
+        ('C I RQ', ('RMC0184_M',)),
+        ('C II reverse', ('RMC0183_M',))
+    ]),
+    ('TCA cycle', [
+        ('oaa -> cit', ('R00351_M',), -1),
+        ('cit -> icit', ('R01900_M',), -1),
+        ('icit -> akg NADH', ('R00709_M',)),
+        ('icit -> akg NADPH', ('R00267_M',)),
+        ('akg -> succoa', ('R02570_M',), -1),
+        ('succoa -> succ', ('R00405_M',), -1),
+        ('succ -> fum', ('R02164_M',)),
+        ('fum -> mal', ('R01082_M',), -1),
+        ('mal -> oaa', ('R00342_M',))
+    ]),
+    ('Oxidative phosphorylation', [
+        ('MA shuttle C', ('R00342',), -1),
+        ('MA shuttle M', ('R00342_M',)),
+        ('Gol3P shuttle', ('R08657',)),
+        ('C I (no H+)', ('RMC0008_M',), -1),
+        ('Complex I', ('R02163_M',), -1),
+        ('Complex II', ('R02164_M',)),
+        ('Complex III', ('R02161_M',)),
+        ('Complex IV', ('R00081_M',)),
+        ('ATP synthase', ('R00086_M',), -1)
+    ])
+]
+# ('Water', ('DIFFUSION_1','EX00001'), -1) ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
+
+# # #  Program objects
+#test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
+#test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
+
 def basic_stats(model):
     descrip_str = '\n\nBasic stats for model: %s' % model
     print('%s\n%s' % (descrip_str, '='*len(descrip_str.strip())))
@@ -410,18 +460,33 @@ def check_rxn_missing_mtb(mtb, rs, ps, rxn_mtbs):
     else:
         return 0 # neither reaction modification found
 
-def test_changed_constraints(rxn_ids, m, fva, bounds_deltas, obj_f_threshold=1):
+def test_changed_constraints(rxn_ids, model, fva, bounds_deltas, cumulative=True, obj_f_threshold=1.0):
+    """cumulative=True indicates that all reactions are modified, and the model tested once; if False, each modification is tested in isolation. If bound_deltas==None, the reaction bounds are set to 0.
+    """
+    orig_obj_f = model.optimize().f
+    m = model.copy()
+    if cumulative == True:
+        return mod_rxns_and_test(rxn_ids, m, fva, orig_obj_f, bounds_deltas, obj_f_threshold)
+    else:
+        diffs = [mod_rxns_and_test([r_id], m, fva, orig_obj_f, bounds_deltas, obj_f_threshold) for r_id in rxn_ids]
+        diffs = [d for d in diffs if d]
+        diffs.sort(key=lambda d: -abs(d[0]))
+        return diffs
+
+def mod_rxns_and_test(rxn_ids, m, fva, orig_obj_f, bounds_deltas, obj_f_threshold):
     # Changes all rxns, tests new objective function once.
-    orig_obj_f = m.solution.f
     obj_diff = ()
     old_bounds = []
     for r_id in rxn_ids:
         rxn = m.reactions.get_by_id(r_id)
         ob = rxn.bounds
         old_bounds.append(ob)
-        rxn.bounds = (ob[0]+bounds_deltas[0], ob[1]+bounds_deltas[1])
+        if bounds_deltas == None:
+            rxn.bounds = (0.0, 0.0)
+        else:
+            rxn.bounds = (ob[0]+bounds_deltas[0], ob[1]+bounds_deltas[1])
     new_obj_f = m.optimize().f
-    if new_obj_f-orig_obj_f > obj_f_threshold:
+    if abs(new_obj_f-orig_obj_f) > obj_f_threshold:
         new_fva = cobra.flux_analysis.flux_variability_analysis(m)
         fva_diffs = tuple((round(new_fva[r_id]['minimum']-fva[r_id]['minimum']), round(new_fva[r_id]['maximum']-fva[r_id]['maximum'])) for r_id in rxn_ids)
         obj_diff = (round(new_obj_f-orig_obj_f), rxn_ids, fva_diffs)
@@ -429,150 +494,98 @@ def test_changed_constraints(rxn_ids, m, fva, bounds_deltas, obj_f_threshold=1):
         m.reactions.get_by_id(r_id).bounds = ob
     return obj_diff
 
-def test_compartment_transports(model):
-    # For every mtb, add free cyto-mito transport. see which improve objective.
-    pass
+def run():
+    # # #  Parameters
+    min_flux = -1000
+    max_flux = 1000
+    min_colour = '#ff0000'
+    zero_colour = '#ffff00'
+    max_colour = '#00ff00'
+    colour_range = (min_colour, zero_colour, max_colour)
+
+    # # #  Run-time options
+    files_dir = '/mnt/hgfs/win_projects/brugia_project'
+    model_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
+    mtb_cmp_str = '%s_wip.xlsx'
+    verbose = True
+    topology_analysis = False
+    fba_analysis = False
+    fva_analysis = True
+    save_visualizations = False
+    do_reaction_mtb_comparison = None # 'C00080', or None
+    test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.
+
+    model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
+    models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
+
+    if do_reaction_mtb_comparison:
+        new_model_files, new_models = [], []
+        cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
+        cel_m.reactions.BIO0103.objective_coefficient = 1.0
+        for m_file, model in zip(model_files, models):
+            mtb_outfile = mtb_cmp_str % m_file.rpartition('.')[0]
+            m = model.copy()
+            compare_reaction_mtbs(cel_m, m, do_reaction_mtb_comparison, mtb_outfile)
+            new_model_files.append(mtb_outfile)
+            new_models.append(read_excel(mtb_outfile))
+        model_files += new_model_files
+        models += new_models
+
+    viz_strs = [os.path.split(m_file.rpartition('.')[0]+'_%s.txt')[1] for m_file in model_files]
+
+    for m in models:
+        cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
+        # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
+
+    if topology_analysis:
+        for m in models:
+            basic_stats(m)
+        # # compare_models(m1, m2)
+
+    if verbose:
+        for m in models:
+            print('\n%s summary:' % m)
+            m.summary()
+
+    if fba_analysis:
+        for m, viz_str in zip(models, viz_strs):
+            analyze_shadows(m, 5)
+            if save_visualizations:
+                visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
+        # # compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
+
+    fvas = []
+    if fva_analysis:
+        for m, viz_str in zip(models, viz_strs):
+            m_fva = cobra.flux_analysis.flux_variability_analysis(m)
+            fvas.append(m_fva)
+            if save_visualizations:
+                visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
+        pathway_analysis(models, fvas, pathways_for_analysis)
+
+    #assess_metabolites_impact(models[0], models[0].metabolites)
+
+    if test_nutrient_combos:
+        desc_str = '\nNutrient imports'
+        print('%s\n%s' % (desc_str, '-' * len(desc_str.strip())))
+        m, orig_fva = models[2], fvas[2]
+        bounds_deltas = (0, 60)
+        rxn_ids = ['NUTRIENTS_%i' % i for i in range(1, 21)]
+        rxn_combs = list(itertools.combinations(rxn_ids, test_nutrient_combos))
+        diffs = [test_changed_constraints(r_ids, m, orig_fva, bounds_deltas) for r_ids in rxn_combs]
+        diffs = [d for d in diffs if d]
+        diffs.sort(key=lambda d: -d[0])
+        for d in diffs:
+            print d
+
+    return models, fvas
 
 
-# # #  Parameters
-min_flux = -1000
-max_flux = 1000
-min_colour = '#ff0000'
-zero_colour = '#ffff00'
-max_colour = '#00ff00'
-colour_range = (min_colour, zero_colour, max_colour)
-
-# # #  Run-time options
-files_dir = '/mnt/hgfs/win_projects/brugia_project'
-model_files = ['model_o_vol_3.xlsx', 'model_b_mal_3.xlsx', 'model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
-mtb_cmp_str = '%s_wip.xlsx'
-verbose = True
-topology_analysis = False
-fba_analysis = False
-fva_analysis = True
-save_visualizations = False
-do_reaction_mtb_comparison = None # 'C00080', or None
-test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.
-
-# # #  Pathway analysis
-pathways_for_analysis = [
-    ('Fundamental imports', [
-        ('Glucose', ('CARBON_SOURCE','EX00031')),
-        ('TAGs', ('FA_SOURCE',)),
-        ('Oxygen', ('DIFFUSION_2','EX00007'), -1)
-    ]),
-    ('Waste exports', [
-        ('CO2', ('DIFFUSION_3','EX00011')),
-        ('Lactate', ('R00703',), -1),
-        ('Succinate', ('SINK_10',)),
-        ('Acetate', ('SINK_8',)),
-        ('Propanoate', ('SINK_13',))
-    ]),
-    ('Aerobic vs anaerobic', [
-        ('Pyr -> mito', ('M_TRANS_5',)),
-        ('PEP -> oaa', ('R00431',), -1),
-        ('icit -> glx+suc', ('R00479_M',)),
-        ('C I RQ', ('RMC0184_M',)),
-        ('C II reverse', ('RMC0183_M',))
-    ]),
-    ('TCA cycle', [
-        ('oaa -> cit', ('R00351_M',), -1),
-        ('cit -> icit', ('R01900_M',), -1),
-        ('icit -> akg NADH', ('R00709_M',)),
-        ('icit -> akg NADPH', ('R00267_M',)),
-        ('akg -> succoa', ('R02570_M',), -1),
-        ('succoa -> succ', ('R00405_M',), -1),
-        ('succ -> fum', ('R02164_M',)),
-        ('fum -> mal', ('R01082_M',), -1),
-        ('mal -> oaa', ('R00342_M',))
-    ]),
-    ('Oxidative phosphorylation', [
-        ('MA shuttle C', ('R00342',), -1),
-        ('MA shuttle M', ('R00342_M',)),
-        ('Gol3P shuttle', ('R08657',)),
-        ('C I (no H+)', ('RMC0008_M',), -1),
-        ('Complex I', ('R02163_M',), -1),
-        ('Complex II', ('R02164_M',)),
-        ('Complex III', ('R02161_M',)),
-        ('Complex IV', ('R00081_M',)),
-        ('ATP synthase', ('R00086_M',), -1)
-    ])
-]
-# ('Water', ('DIFFUSION_1','EX00001'), -1) ('d-oro -> UQH2', ('R01868',)) ('Non-growth', ('NGAM',)) ('Phosphate', ('DIFFUSION_6','EX00009'), -1), ('Bicarb', ('DIFFUSION_8','EX00288')),
-
-# # #  Program objects
-test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
-test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
 
 # # #  Run steps
-#cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
-#cel_m.reactions.BIO0101.objective_coefficient = 1.0 # # #  TESTING ONLY
-#cobra.flux_analysis.parsimonious.optimize_minimal_flux(cel_m)
-#cel_fva = cobra.flux_analysis.flux_variability_analysis(cel_m)
-
-model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
-models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
-
-if do_reaction_mtb_comparison:
-    new_model_files, new_models = [], []
-    cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
-    cel_m.reactions.BIO0103.objective_coefficient = 1.0
-    for m_file, model in zip(model_files, models):
-        mtb_outfile = mtb_cmp_str % m_file.rpartition('.')[0]
-        m = model.copy()
-        compare_reaction_mtbs(cel_m, m, do_reaction_mtb_comparison, mtb_outfile)
-        new_model_files.append(mtb_outfile)
-        new_models.append(read_excel(mtb_outfile))
-    model_files += new_model_files
-    models += new_models
-
-viz_strs = [os.path.split(m_file.rpartition('.')[0]+'_%s.txt')[1] for m_file in model_files]
-
-for m in models:
-    cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
-    # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
-
-if topology_analysis:
-    for m in models:
-        basic_stats(m)
-    # # compare_models(m1, m2)
-
-if verbose:
-    for m in models:
-        print('\n%s summary:' % m)
-        m.summary()
-
-if fba_analysis:
-    for m, viz_str in zip(models, viz_strs):
-        analyze_shadows(m, 5)
-        if save_visualizations:
-            visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
-    # # compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
-
-fvas = []
-if fva_analysis:
-    for m, viz_str in zip(models, viz_strs):
-        m_fva = cobra.flux_analysis.flux_variability_analysis(m)
-        fvas.append(m_fva)
-        if save_visualizations:
-            visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
-    pathway_analysis(models, fvas, pathways_for_analysis)
-
-#assess_metabolites_impact(models[0], models[0].metabolites)
-
-if test_nutrient_combos:
-    desc_str = '\nNutrient imports'
-    print('%s\n%s' % (desc_str, '-' * len(desc_str.strip())))
-    m, orig_fva = models[2], fvas[2]
-    bounds_deltas = (0, 60)
-    rxn_ids = ['NUTRIENTS_%i' % i for i in range(1, 21)]
-    rxn_combs = list(itertools.combinations(rxn_ids, test_nutrient_combos))
-    diffs = [test_changed_constraints(r_ids, m, orig_fva, bounds_deltas) for r_ids in rxn_combs]
-    diffs = [d for d in diffs if d]
-    diffs.sort(key=lambda d: -d[0])
-    for d in diffs:
-        print d
+if __name__ == '__main__':
+    run()
 
 
 # Nutrient studies

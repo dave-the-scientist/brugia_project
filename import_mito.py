@@ -96,7 +96,7 @@ def add_mito_reaction(kegg, suffix, model, cel_rxn):
 # # #  Options
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
 model_files = ['model_o_vol_3.xlsx', 'model_b_mal_3.xlsx']
-out_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
+out_files = ['model_o_vol_3.5-wip.xlsx', 'model_b_mal_3.5-wip.xlsx']
 do_deletions = True
 
 cel_m = read_excel(os.path.join(files_dir, 'iCEL1273.xlsx'), verbose=False)
