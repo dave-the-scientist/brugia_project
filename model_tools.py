@@ -24,9 +24,9 @@ pathways_for_analysis = [
     ('Waste exports', [
         ('CO2', ('DIFFUSION_3','EX00011')),
         ('Lactate', ('R00703',), -1),
-        ('Succinate', ('SINK_10',)),
-        ('Acetate', ('SINK_8',)),
-        ('Propanoate', ('SINK_13',))
+        ('Succinate', ('SINK_2',)),
+        ('Acetate', ('SINK_3',)),
+        ('Propanoate', ('SINK_4',))
     ]),
     ('Aerobic vs anaerobic', [
         ('Pyr -> mito', ('M_TRANS_5',)),
@@ -486,10 +486,18 @@ def mod_rxns_and_test(rxn_ids, m, fva, orig_obj_f, bounds_deltas, obj_f_threshol
         else:
             rxn.bounds = (ob[0]+bounds_deltas[0], ob[1]+bounds_deltas[1])
     new_obj_f = m.optimize().f
-    if abs(new_obj_f-orig_obj_f) > obj_f_threshold:
+    print rxn_ids, m.solution, new_obj_f
+    if new_obj_f == None:
+        obj_diff = (-orig_obj_f, rxn_ids, (), ['infeasible'])
+    elif abs(new_obj_f-orig_obj_f) > obj_f_threshold:
         new_fva = cobra.flux_analysis.flux_variability_analysis(m)
         fva_diffs = tuple((round(new_fva[r_id]['minimum']-fva[r_id]['minimum']), round(new_fva[r_id]['maximum']-fva[r_id]['maximum'])) for r_id in rxn_ids)
-        obj_diff = (round(new_obj_f-orig_obj_f), rxn_ids, fva_diffs)
+        bio_shadows = []
+        for mtb in m.reactions.BIOMASS.metabolites:
+            if abs(mtb.y) < 0.25: continue
+            sub_shadows = '|'.join('%s %.1f'%(s.id, s.y) for s in m.reactions.get_by_id(mtb.id.upper()).metabolites if abs(s.y) > 0.25 and mtb.id != s.id)
+            bio_shadows.append('(%s %.1f: %s)' % (mtb.id, round(mtb.y, 1), sub_shadows))
+        obj_diff = (round(new_obj_f-orig_obj_f), rxn_ids, fva_diffs, bio_shadows)
     for r_id, ob in zip(rxn_ids, old_bounds):
         m.reactions.get_by_id(r_id).bounds = ob
     return obj_diff

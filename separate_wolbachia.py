@@ -55,9 +55,13 @@ def setup_wol_reaction(n_rxn, w_rxn, wol_gene_names):
         else:
             if mtb.id[0] != n_cmp:
                 print n_rxn.id, n_rxn.reaction
-        w_mtb_id = 'W%s' % mtb.id[1:]
+        if mtb.id[0] == 'G':
+            w_mtb_id = 'W' + mtb.id
+        else:
+            w_mtb_id = 'W%s' % mtb.id[1:]
         w_mtb = Metabolite(w_mtb_id, name=mtb.name, compartment='w')
         mtb_dict[w_mtb] = coef
+    w_rxn.add_metabolites(mtb_dict)
     w_rxn.gene_names = wol_gene_names
     w_rxn.bounds = n_rxn.bounds
     w_rxn.name = n_rxn.name
@@ -78,7 +82,7 @@ wol_model_names = ['model_wOv_1', 'model_wBm_1']
 out_nem_model_names = ['model_o_vol_4', 'model_b_mal_4']
 nem_dont_delete = set(['R00104', 'R00161'])
 # # #  Run-time options
-save_wol_models = False
+save_wol_models = True
 save_nem_models = True
 test_removed_wol_rxns = True # Check the effect of removing the wolbachia-only reactions
 
@@ -93,16 +97,16 @@ wol_models, unique_wol_ids = separate_wol_rxns(in_models, wol_model_names, test_
 
 if test_removed_wol_rxns:
     for m, fva, r_ids in zip(in_models, fvas, unique_wol_ids):
-        print('Evaluating %i reactions from %s. Initial flux: %.1f.' % (len(r_ids), m, m.solution.f))
+        print('\nEvaluating %i reactions from %s. Initial flux: %.1f.' % (len(r_ids), m, m.solution.f))
         diffs = test_changed_constraints(r_ids, m, fva, bounds_deltas=None, cumulative=False)
-        # Helpful if tried killing each of the reactions, then adding free imports of each biomass category back in, to see which is most affected.
         for d in diffs:
-            print d
+            print('%i loss [%s]: %s' % (d[0], d[1][0], ', '.join(x for x in d[3]) ))
 
 if save_wol_models:
     out_wol_model_files = [os.path.join(files_dir, '%s-wip.xlsx'%m_name) for m_name in wol_model_names]
     for wm, m_file in zip(wol_models, out_wol_model_files):
         write_excel(wm, m_file)
+    # add in common reactions.
 if save_nem_models:
     out_nem_model_files = [os.path.join(files_dir, '%s-wip.xlsx'%m_name) for m_name in out_nem_model_names]
     for m, m_file in zip(in_models, out_nem_model_files):
