@@ -543,6 +543,7 @@ def run():
 
     for m in models:
         cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
+        #m.optimize()
         # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
 
     if topology_analysis:
