@@ -18,8 +18,9 @@ class ReactionVariances(object):
         self.modified = [] # List of reaction ids that were each modified and tested.
         self.measured = [] # List of reaction ids for which data are collected.
         self.measured_descrs = [] # List of human-readable descriptions.
+        self._infeasible = 0.1 # An objective value below this indicates it's infeasible.
+        self._epsilon = 1E-8 # Required to deal with floating point errors.
         self._rev_suffix = '_reverse'
-        self._epsilon = 1E-5
         self._parse_inputs(to_modify, to_measure)
         self._setup_models(model) # Sets up self.irr_lp, self.irr_model, and self.rev_model
         self.data = np.zeros([m[3] for m in to_modify] + [len(to_measure)+2])
@@ -121,13 +122,10 @@ class ReactionVariances(object):
         for r_fs, ind in itertools.izip(itertools.product(*self._steps), itertools.product( *[range(len(s)) for s in self._steps] )):
             yield zip(self.modified, r_fs), ind
     def _optimize_and_measure(self, data_ind, rxn_steps):
-        infeasible = 0.1
         obj_f, total_f = 0.0, 0.0
-
         self.rev_lp.solve_problem(objective_sense='maximize')
-
         self.rev_model.solution = self.solver.format_solution(self.rev_lp, self.rev_model)
-        if self.rev_model.solution.status == "optimal" and self.rev_model.solution.f > infeasible:
+        if self.rev_model.solution.status == "optimal" and self.rev_model.solution.f > self._infeasible:
             obj_f = self.rev_model.solution.f
             self.irr_lp.change_variable_bounds(self._obj_ind, obj_f-self._epsilon, self._obj_ub)
             self.irr_lp.solve_problem(objective_sense='minimize') # Minimized for parsimony
@@ -181,7 +179,7 @@ if __name__ == '__main__':
     model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 
     to_modify = [('CARBON_SOURCE', 25, 200, 3), ('DIFFUSION_2', -80, -500, 3)]
-    #to_modify = [('CARBON_SOURCE', 50, 200, 20), ('FA_SOURCE', 0, 50, 20), ('DIFFUSION_2', 0, -500, 20)]
+    to_modify = [('CARBON_SOURCE', 50, 200, 20), ('FA_SOURCE', 0, 50, 20), ('DIFFUSION_2', 0, -500, 20)]
     to_measure = {'M_TRANS_5':'Mito Pyruvate', 'R01082_M':'Fum -> mal'}
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
