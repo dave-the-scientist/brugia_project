@@ -18,7 +18,11 @@ class ReactionVariances(object):
         self.measured_attrs = {} # List of human-readable descriptions.
         self.infeasible = 0.1 # An objective value below this is considered infeasible.
         self.epsilon = 1E-6 # Required to deal with floating point errors.
-        self._rev_suffix = '_reverse'
+        self._rxn_rev_suffix = '_reverse'
+        self._obj_fxn_id = '_objective_function'
+        self._obj_fxn_label = 'Objective function'
+        self._total_flux_rxn_id = '_total_system_flux'
+        self._total_flux_rxn_label = 'Total system flux'
         if solver != None:
             self.solver = solver
         else:
@@ -39,16 +43,26 @@ class ReactionVariances(object):
 
     def negative_modified(self, modified_rxn):
         """Report negative values for this reaction."""
-        self.modified_attrs[modified_rxn]['coefficient'] = -1.0
+        if isinstance(modified_rxn, basestring):
+            if modified_rxn in self.modified_attrs:
+                self.modified_attrs[modified_rxn]['coefficient'] = -1.0
+        else:
+            for m_rxn in modified_rxn:
+                if m_rxn in self.modified_attrs:
+                    self.modified_attrs[m_rxn]['coefficient'] = -1.0
     def negative_measured(self, measured_rxn):
         """Report negative values for this reaction."""
-        self.measured_attrs[measured_rxn]['coefficient'] = -1.0
+        if isinstance(measured_rxn, basestring):
+            if measured_rxn in self.measured_attrs:
+                self.measured_attrs[measured_rxn]['coefficient'] = -1.0
+        else:
+            for m_rxn in measured_rxn:
+                if m_rxn in self.measured_attrs:
+                    self.measured_attrs[m_rxn]['coefficient'] = -1.0
     def update_modified_attrs(self, modified_rxn, attr_dict):
         self.modified_attrs[modified_rxn].update(attr_dict)
 
-    def heatmaps(self, measured_rxns, colormap='RdBu', interpolation='quadric'):
-        # interpolation = 'spline36', 'hanning'
-        figsize = (len(measured_rxns)*3.5, 3)
+    def heatmaps_2D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=3, colormap='RdBu', smoothed=False, show_all_x_axes=False, show_all_y_axes=False):
         if len(self.modified) != 2:
             print('Error: heatmaps() can only be called with 2 dimensional data.')
             exit()
@@ -56,20 +70,38 @@ class ReactionVariances(object):
             if m_rxn not in self.measured:
                 print('Error: the given reaction "%s" was not measured in the current data.' % m_rxn)
                 exit()
-        fig, axs = plt.subplots(1, len(measured_rxns), figsize=figsize, sharey=True)
-        if len(measured_rxns) == 1:
-            axs = [axs]
-        for ind, (m_rxn, ax) in enumerate(zip(measured_rxns, axs)):
-            self.draw_heatmap(m_rxn, fig, ax, colormap, interpolation)
-            if ind == 0: # Specific to left-most plot.
-                pass
-            else: # All others.
+        if include_total_flux:
+            measured_rxns = [self._total_flux_rxn_id] + measured_rxns
+        if include_objective:
+            measured_rxns = [self._obj_fxn_id] + measured_rxns
+        interpolation = 'spline36' if smoothed else 'none'
+        num_graphs = len(measured_rxns)
+        nrows, ncols = (num_graphs-1)//per_row + 1, min(num_graphs, per_row)
+        figsize = (ncols*graph_width, nrows*graph_height)
+        fig = plt.figure(figsize=figsize)
+        first_ax = None
+        for ind, m_rxn in enumerate(measured_rxns):
+            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
+            self._draw_heatmap(m_rxn, fig, ax, colormap, interpolation)
+            if ind == 0:
+                first_ax = ax
+            if not show_all_x_axes and ind < num_graphs - per_row: # Applies to all graphs except bottom in each column.
+                ax.tick_params('x', which='both', bottom='off', labelbottom='off')
+            if not show_all_y_axes and ind % per_row: # Applies to all graphs except left-most in each row.
                 ax.tick_params('y', which='both', left='off', labelleft='off')
         plt.tight_layout()
         plt.show()
-    def draw_heatmap(self, measured_rxn, fig, axis, colormap, interpolation):
+    def heatmaps_3D(self, measured_rxns):
+        """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps."""
+        pass
+    def _draw_heatmap(self, measured_rxn, fig, axis, colormap, interpolation):
         min_flux_range = 5.0 # Affects the colouring range.
-        fluxes = self.get_flux(measured_rxn) * self.measured_attrs[measured_rxn]['coefficient']
+        if measured_rxn == self._obj_fxn_id:
+            fluxes = self.get_objective_flux() * self.measured_attrs[measured_rxn]['coefficient']
+        elif measured_rxn == self._total_flux_rxn_id:
+            fluxes = self.get_total_flux() * self.measured_attrs[measured_rxn]['coefficient']
+        else:
+            fluxes = self.get_flux(measured_rxn) * self.measured_attrs[measured_rxn]['coefficient']
         max_flux = max(abs(fluxes.max()), abs(fluxes.min()), min_flux_range)
         x_attrs = self.modified_attrs[self.modified[1]]
         y_attrs = self.modified_attrs[self.modified[0]]
@@ -131,7 +163,7 @@ class ReactionVariances(object):
                 rxn_f -= self.epsilon
             self.rev_lp.change_variable_bounds(self._rev_m_rxn_ind[rxn_id], rxn_f, rxn_f+self.epsilon)
             self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rxn_id], fwd_f, fwd_f+self.epsilon)
-            rev_id = rxn_id + self._rev_suffix
+            rev_id = rxn_id + self._rxn_rev_suffix
             if rev_id in self._irr_m_rxn_ind:
                 self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f, rev_f+self.epsilon)
     def _measure_reactions(self, data_ind, obj_f, total_f):
@@ -142,7 +174,7 @@ class ReactionVariances(object):
                 val = 0
             else:
                 val = self.irr_model.reactions.get_by_id(rxn_id).x
-                rev_id = rxn_id+self._rev_suffix
+                rev_id = rxn_id + self._rxn_rev_suffix
                 if val == 0 and rev_id in self.irr_model.reactions:
                     val = -self.irr_model.reactions.get_by_id(rev_id).x
             self.data[data_ind][i+2] = val
@@ -154,13 +186,24 @@ class ReactionVariances(object):
     # # # # #  Private methods: input and setup. # # # # #
     def _parse_inputs(self, to_modify, to_measure):
         # Sets self.modified, self.measured, self.measured_attrs, self._measured_ind, self._steps
+        default_modified_attrs = {'coefficient':1.0}
+        default_measured_attrs = {'coefficient':1.0}
         if not to_modify or not to_measure:
             print('At least one reaction must be given to modify, and at least one to measure')
             exit()
         self.modified = [m[0] for m in to_modify] # Retains the same order.
-        self.modified_attrs = {m[0]:{'label':m[1], 'coefficient':1.0} for m in to_modify}
         self.measured = list(sorted(to_measure.keys())) # Sorted by reaction id.
-        self.measured_attrs = {m:{'label':n, 'coefficient':1.0} for m,n in to_measure.items()}
+        while self._obj_fxn_id in self.measured:
+            self._obj_fxn_id = '_' + self._obj_fxn_id
+        while self._total_flux_rxn_id in self.measured:
+            self._total_flux_rxn_id = '_' + self._total_flux_rxn_id
+        self.modified_attrs, self.measured_attrs = {}, {}
+        for m in to_modify:
+            self.modified_attrs.setdefault(m[0], {'label':m[1]}).update(default_modified_attrs)
+        for m, n in to_measure.items():
+            self.measured_attrs.setdefault(m, {'label':n}).update(default_measured_attrs)
+        self.measured_attrs.setdefault(self._obj_fxn_id, {'label':self._obj_fxn_label}).update(default_measured_attrs)
+        self.measured_attrs.setdefault(self._total_flux_rxn_id, {'label':self._total_flux_rxn_label}).update(default_measured_attrs)
         self._measured_ind = {m:i+2 for i,m in enumerate(self.measured)} # Gives index in self.data.
         self._steps = [self._expand_steps(*m[2:]) for m in to_modify] # A list of lists, where each sublist contains the flux steps for one modify reaction series.
     def _setup_models(self, model):
@@ -183,7 +226,7 @@ class ReactionVariances(object):
             exit()
         irr_m_rxn_ind, rev_m_rxn_ind, obj_ind = {}, {}, None
         for r_id in self.modified + self.measured:
-            rev_id = r_id + self._rev_suffix
+            rev_id = r_id + self._rxn_rev_suffix
             if r_id not in self.irr_model.reactions:
                 print('Could not find reaction "%s" in the model.' % r_id)
                 exit()
@@ -239,16 +282,17 @@ if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 
-    to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', 0, -500, 20)]
+    to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
+    #to_modify = [('FA_SOURCE', 'Fatty acids', 0, 100, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
+    #to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('FA_SOURCE', 'Fatty acids', 0, 70, 20)]
     #to_modify = [('CARBON_SOURCE', 'Glucose', 50, 200, 10), ('FA_SOURCE', 'Fatty acids', 0, 50, 10), ('DIFFUSION_2', 'Oxygen', 0, -500, 10)]
-    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fum -> mal', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
-    to_display = ['M_TRANS_5', 'R01082_M', 'SINK_3', 'SINK_4']
-    #to_display = ['R01082_M']
+    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fum -> mal', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
+    to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
     models = [read_excel(m_file, verbose=False) for m_file in model_files]
     rv = ReactionVariances(models[0], to_modify, to_measure)
     rv.negative_modified('DIFFUSION_2')
-    rv.negative_measured('R01082_M')
+    rv.negative_measured(['R01082_M', 'R00086_M'])
 
-    rv.heatmaps(to_display)
+    rv.heatmaps_2D(to_display, include_objective=True, show_all_x_axes=True, show_all_y_axes=True)
