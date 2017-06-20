@@ -62,19 +62,11 @@ class ReactionVariances(object):
     def update_modified_attrs(self, modified_rxn, attr_dict):
         self.modified_attrs[modified_rxn].update(attr_dict)
 
-    def heatmaps_2D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=3, colormap='RdBu', smoothed=False, show_all_x_axes=False, show_all_y_axes=False):
+    def heatmaps_2D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=6, colormap='RdBu', smoothed=False, show_all_x_axes=False, show_all_y_axes=False):
         if len(self.modified) != 2:
-            print('Error: heatmaps() can only be called with 2 dimensional data.')
+            print('Error: heatmaps_2D() can only be called with 2 dimensional data.')
             exit()
-        for m_rxn in measured_rxns:
-            if m_rxn not in self.measured:
-                print('Error: the given reaction "%s" was not measured in the current data.' % m_rxn)
-                exit()
-        if include_total_flux:
-            measured_rxns = [self._total_flux_rxn_id] + measured_rxns
-        if include_objective:
-            measured_rxns = [self._obj_fxn_id] + measured_rxns
-        interpolation = 'spline36' if smoothed else 'none'
+        measured_rxns, interpolation = self._initialize_heatmap_options(measured_rxns, include_objective, include_total_flux, smoothed)
         num_graphs = len(measured_rxns)
         nrows, ncols = (num_graphs-1)//per_row + 1, min(num_graphs, per_row)
         figsize = (ncols*graph_width, nrows*graph_height)
@@ -91,10 +83,60 @@ class ReactionVariances(object):
                 ax.tick_params('y', which='both', left='off', labelleft='off')
         plt.tight_layout()
         plt.show()
-    def heatmaps_3D(self, measured_rxns):
-        """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps."""
-        pass
-    def _draw_heatmap(self, measured_rxn, fig, axis, colormap, interpolation):
+    def heatmaps_3D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, colormap='RdBu', smoothed=False, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, row_label_width=None, row_squish=None, row_label_rpad=10):
+        """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps. row_label_width and row_squish do X. If not given a crude estimation will be used. row_label_rpad is the space between the label and the y-axis of the graph."""
+        if len(self.modified) != 3:
+            print('Error: heatmaps_3D() can only be called with 3 dimensional data.')
+            exit()
+        measured_rxns, interpolation = self._initialize_heatmap_options(measured_rxns, include_objective, include_total_flux, smoothed)
+        dim3_label = self.modified_attrs[self.modified[2]]['label']
+        dim3_coef = self.modified_attrs[self.modified[2]]['coefficient']
+        dim3_steps = [s*dim3_coef for s in self._steps[2]]
+        if row_label_width == None:
+            row_label_width = 0.48 + len(dim3_label) / 17.0
+        # Add option to manage space between graphs. Would have to modify figsize and a padding option in subplot.
+        nrows, ncols = len(dim3_steps), len(measured_rxns)
+        num_graphs = nrows * ncols
+        figsize = (ncols*graph_width + row_label_width, nrows*graph_height)
+        if row_squish == None:
+            row_squish = row_label_width / figsize[0] * 1.7
+        fig = plt.figure(figsize=figsize)
+        first_ax = None
+        for ind, m_rxn in enumerate(measured_rxns * len(dim3_steps)):
+            dim3_ind = ind//len(measured_rxns)
+            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
+            self._draw_heatmap(m_rxn, fig, ax, colormap, interpolation, subslice=[slice(None), slice(None), dim3_ind])
+            # Remove title from non-top row graphs. Adjust heights to be reasonable.
+            if ind == 0:
+                first_ax = ax
+            if not ind % ncols:
+                row_label = '%s\n[%.1f]' % (dim3_label, dim3_steps[dim3_ind])
+                ax.annotate(row_label, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - row_label_rpad, 0), xycoords=ax.yaxis.label, textcoords='offset points', size='large', ha='right', va='center')
+
+            if not show_all_titles and ind >= ncols: # Applies to all graphs except top row.
+                ax.axes.set_title('')
+            if not show_all_x_axes and ind < num_graphs - ncols: # Applies to all graphs except bottom in each column.
+                ax.axes.get_xaxis().set_visible(False)
+                #ax.tick_params('x', which='both', bottom='off', labelbottom='off') # Hides the axis values, but keeps the axis title.
+            if not show_all_y_axes and ind % ncols: # Applies to all graphs except left-most in each row.
+                ax.axes.get_yaxis().set_visible(False)
+                #ax.tick_params('y', which='both', left='off', labelleft='off') # Hides the axis values, but keeps the axis title.
+
+        plt.tight_layout()
+        fig.subplots_adjust(left=row_squish, top=0.95)
+        plt.show()
+    def _initialize_heatmap_options(self, measured_rxns, include_objective, include_total_flux, smoothed):
+        for m_rxn in measured_rxns:
+            if m_rxn not in self.measured:
+                print('Error: the given reaction "%s" was not measured in the current data.' % m_rxn)
+                exit()
+        if include_total_flux:
+            measured_rxns = [self._total_flux_rxn_id] + measured_rxns
+        if include_objective:
+            measured_rxns = [self._obj_fxn_id] + measured_rxns
+        interpolation = 'spline36' if smoothed else 'none'
+        return measured_rxns, interpolation
+    def _draw_heatmap(self, measured_rxn, fig, axis, colormap, interpolation, subslice=None):
         min_flux_range = 5.0 # Affects the colouring range.
         if measured_rxn == self._obj_fxn_id:
             fluxes = self.get_objective_flux() * self.measured_attrs[measured_rxn]['coefficient']
@@ -102,6 +144,8 @@ class ReactionVariances(object):
             fluxes = self.get_total_flux() * self.measured_attrs[measured_rxn]['coefficient']
         else:
             fluxes = self.get_flux(measured_rxn) * self.measured_attrs[measured_rxn]['coefficient']
+        if subslice:
+            fluxes = fluxes[subslice]
         max_flux = max(abs(fluxes.max()), abs(fluxes.min()), min_flux_range)
         x_attrs = self.modified_attrs[self.modified[1]]
         y_attrs = self.modified_attrs[self.modified[0]]
@@ -282,17 +326,27 @@ if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 
-    to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
-    #to_modify = [('FA_SOURCE', 'Fatty acids', 0, 100, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
-    #to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('FA_SOURCE', 'Fatty acids', 0, 70, 20)]
-    #to_modify = [('CARBON_SOURCE', 'Glucose', 50, 200, 10), ('FA_SOURCE', 'Fatty acids', 0, 50, 10), ('DIFFUSION_2', 'Oxygen', 0, -500, 10)]
     to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fum -> mal', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
-    to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
+    negative_modified = 'DIFFUSION_2'
+    negative_measured = ['R01082_M', 'R00086_M']
+
+    show_2D_heatmap = False
+    show_3D_heatmap = True
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
     models = [read_excel(m_file, verbose=False) for m_file in model_files]
-    rv = ReactionVariances(models[0], to_modify, to_measure)
-    rv.negative_modified('DIFFUSION_2')
-    rv.negative_measured(['R01082_M', 'R00086_M'])
 
-    rv.heatmaps_2D(to_display, include_objective=True, show_all_x_axes=True, show_all_y_axes=True)
+    if show_2D_heatmap:
+        to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
+        to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
+        rv = ReactionVariances(models[0], to_modify, to_measure)
+        rv.negative_modified(negative_modified)
+        rv.negative_measured(negative_measured)
+        rv.heatmaps_2D(to_display, include_objective=True, include_total_flux=True)
+    if show_3D_heatmap:
+        to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 4), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 4), ('FA_SOURCE', 'Fatty acids', 5, 35, 4)]
+        to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
+        rv = ReactionVariances(models[0], to_modify, to_measure)
+        rv.negative_modified(negative_modified)
+        rv.negative_measured(negative_measured)
+        rv.heatmaps_3D(to_display, include_objective=True, include_total_flux=False)
