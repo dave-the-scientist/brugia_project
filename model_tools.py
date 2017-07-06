@@ -486,7 +486,6 @@ def mod_rxns_and_test(rxn_ids, m, fva, orig_obj_f, bounds_deltas, obj_f_threshol
         else:
             rxn.bounds = (ob[0]+bounds_deltas[0], ob[1]+bounds_deltas[1])
     new_obj_f = m.optimize().f
-    print rxn_ids, m.solution, new_obj_f
     if new_obj_f == None:
         obj_diff = (-orig_obj_f, rxn_ids, (), ['infeasible'])
     elif abs(new_obj_f-orig_obj_f) > obj_f_threshold:

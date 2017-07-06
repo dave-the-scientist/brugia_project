@@ -12,12 +12,13 @@ class ReactionVariances(object):
 
     self.data: numpy.Matrix. The main data structure is an (n+1)-dimensional matrix, where n is the number of modified reactions. Each position in the matrix holds a 1-dimensional array, whose 0-th entry is the objective function flux at that condition, the 1-th entry is the total flux in the entire system at that condition, and the following values are the flux through each reaction in self.measured, sorted by the name of the reaction ID.
     """
-    def __init__(self, model, to_modify, to_measure, solver=None):
+    def __init__(self, model, to_modify, to_measure, tight_bounds=False, solver=None):
         self.name = str(model) # Name of the model.
         self.modified = [] # List of reaction ids that were each modified and tested.
         self.modified_attrs = {} # Dict of properties used for graphing.
         self.measured = [] # List of reaction ids for which data are collected.
         self.measured_attrs = {} # List of human-readable descriptions.
+        self.tight_bounds = tight_bounds # If True lb=ub on modified reactions; else lb=0 (ub=0 for reverse reactions).
         self.infeasible = 0.1 # An objective value below this is considered infeasible.
         self.epsilon = 1E-6 # Required to deal with floating point errors.
         self._rxn_rev_suffix = '_reverse'
@@ -116,6 +117,8 @@ class ReactionVariances(object):
             for m_rxn in measured_rxns:
                 flx = self._get_measured_fluxes(m_rxn)
                 min_flx, max_flx = flx.min(), flx.max()
+                #if m_rxn == '_objective_function': # TESTING
+                #    min_flx = 1.0
                 cmap = self._shiftedColorMap(colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
                 colorbars.append((cmap, min_flx, max_flx))
         else:
@@ -137,7 +140,6 @@ class ReactionVariances(object):
             if m_rxn_ind == 0:
                 row_label = '%s\n[%.1f]' % (dim3_label, dim3_steps[dim3_ind])
                 ax.annotate(row_label, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - row_label_rpad, 0), xycoords=ax.yaxis.label, textcoords='offset points', size='large', ha='right', va='center')
-
             if not show_all_titles and ind >= ncols: # Applies to all graphs except top row.
                 ax.axes.set_title('')
             if not show_all_x_axes and ind < num_graphs - ncols: # Applies to all graphs except bottom in each column.
@@ -146,7 +148,6 @@ class ReactionVariances(object):
             if not show_all_y_axes and ind % ncols: # Applies to all graphs except left-most in each row.
                 ax.axes.get_yaxis().set_visible(False)
                 #ax.tick_params('y', which='both', left='off', labelleft='off') # Hides the axis values, but keeps the axis title.
-
         plt.tight_layout()
         fig.subplots_adjust(left=row_squish, top=1-fig_top_padding, wspace=wspace, hspace=hspace)
         plt.show()
@@ -234,18 +235,34 @@ class ReactionVariances(object):
 
     # # # # #  Private methods: getting and setting values. # # # # #
     def _set_reaction_bounds(self, rxn_steps):
+        if not self.tight_bounds:
+            fwd_f_lb, rev_f_lb = 0.0, 0.0
         for rxn_id, rxn_f in rxn_steps:
             fwd_f, rev_f = 0.0, 0.0
-            if rxn_f > 0:
-                fwd_f = rxn_f
+            if rxn_f >= 0:
+                fwd_f = rxn_f + self.epsilon
             elif rxn_f < 0:
-                rev_f = abs(rxn_f)
+                rev_f = abs(rxn_f) + self.epsilon
                 rxn_f -= self.epsilon
+
+            if self.tight_bounds:
+                fwd_f_lb, rev_f_lb = fwd_f-self.epsilon, rev_f-self.epsilon
+                rxn_lb, rxn_ub = rxn_f, rxn_f+self.epsilon
+            else:
+                rxn_lb, rxn_ub = min(rxn_f, 0.0), max(rxn_f+self.epsilon, 0.0)
+            self.rev_lp.change_variable_bounds(self._rev_m_rxn_ind[rxn_id], rxn_lb, rxn_ub)
+            self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rxn_id], fwd_f_lb, fwd_f)
+            rev_id = rxn_id + self._rxn_rev_suffix
+            if rev_id in self._irr_m_rxn_ind:
+                self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f_lb, rev_f)
+            """
             self.rev_lp.change_variable_bounds(self._rev_m_rxn_ind[rxn_id], rxn_f, rxn_f+self.epsilon)
             self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rxn_id], fwd_f, fwd_f+self.epsilon)
             rev_id = rxn_id + self._rxn_rev_suffix
             if rev_id in self._irr_m_rxn_ind:
                 self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f, rev_f+self.epsilon)
+            """
+
     def _measure_reactions(self, data_ind, obj_f, total_f):
         self.data[data_ind][0] = obj_f
         self.data[data_ind][1] = total_f
@@ -362,9 +379,14 @@ class ReactionVariances(object):
           stop : Offset from highets point in the colormap's range.
               Defaults to 1.0 (no upper ofset). Should be between
               `midpoint` and 1.0.'''
-        epsilon = 0.01
+        epsilon = 0.0001
         start, stop = 0.0, 1.0
+        min_val, max_val = min(0.0, min_val), max(0.0, max_val)
         midpoint = 1.0 - max_val/(max_val + abs(min_val))
+
+
+        # don't think works if min and max are > 0.
+
         cdict = {'red': [], 'green': [], 'blue': [], 'alpha': []}
         # regular index to compute the colors
         reg_index = np.linspace(start, stop, 257)
@@ -402,9 +424,10 @@ if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 
-    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fum -> mal', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
+    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fumarate -> malate', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
     negative_modified = 'DIFFUSION_2'
     negative_measured = ['R01082_M', 'R00086_M']
+    tight_bounds = False
 
     show_2D_heatmap = False
     show_3D_heatmap = True
@@ -415,14 +438,14 @@ if __name__ == '__main__':
     if show_2D_heatmap:
         to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
         to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
-        rv = ReactionVariances(models[0], to_modify, to_measure)
+        rv = ReactionVariances(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
         rv.negative_modified(negative_modified)
         rv.negative_measured(negative_measured)
         rv.heatmaps_2D(to_display, include_objective=True, include_total_flux=True)
     if show_3D_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 301, 25), ('DIFFUSION_2', 'Oxygen', -1.0, -601, 25), ('FA_SOURCE', 'Fatty acids', 2, 25, 6)]
-        to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
-        rv = ReactionVariances(models[0], to_modify, to_measure)
+        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', -1.0, -501, 25), ('FA_SOURCE', 'Fatty acids', 5, 25, 6)]
+        to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
+        rv = ReactionVariances(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
         rv.negative_modified(negative_modified)
         rv.negative_measured(negative_measured)
         rv.heatmaps_3D(to_display, include_objective=True, include_total_flux=False)
