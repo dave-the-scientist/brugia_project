@@ -237,12 +237,6 @@ def analyze_shadows(model, num):
 
     neg_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:num]]
     print('Negative (high value):\n%s' % ('\n'.join(neg_shs)))
-
-    #print('High value [ID ShadowPrice ObjDiff ImportFlux]:')
-    #for mtb in mtbs_shs[:num]:
-    #    new_f, imp_flx = single_metabolite_import_impact(m, mtb)
-    #    print('\t%s %i %.1f %.1f' % (mtb.id, mtb.y, new_f-orig_f, imp_flx))
-
     pos_shs = ['\t%s %.2f'%(c.id, c.y) for c in mtbs_shs[:-num-1:-1]]
     print('Positive (negative value):\n%s' % ('\n'.join(pos_shs)))
 
@@ -386,8 +380,11 @@ def pathway_analysis(models, fvas, pathways):
             for i, (model, fva) in enumerate(zip(models, fvas)): # for each model:
                 for r_id in r_ids: # one of these IDs should be in that model.
                     fva_data = fva.get(r_id, None)
-                    if fva_data == None:
-                        r_id = r_id[:-2]
+                    if fva_data == None: # check for _W of the reaction
+                        if r_id+'_W' in fva:
+                            r_id = r_id+'_W'
+                        elif r_id[:-2]+'_W' in fva:
+                            r_id = r_id[:-2]+'_W'
                         fva_data = fva.get(r_id, None)
                     if fva_data != None:
                         rxn_f = int(round(model.reactions.get_by_id(r_id).x * rxn_coef))
@@ -512,7 +509,7 @@ def run():
 
     # # #  Run-time options
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
+    model_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx', 'model_wBm_4-wip.xlsx']
     mtb_cmp_str = '%s_wip.xlsx'
     verbose = True
     topology_analysis = False
