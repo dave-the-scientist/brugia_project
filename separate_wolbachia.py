@@ -14,11 +14,12 @@ def separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_
         wm = Model(wol_name, name=wol_name)
         wm += wol_common_model
         wm += wol_unique_model
+        # These two steps are likely why half of the mtbs are unnamed.
         wm.id = wol_name # Needed otherwise it concatinates other model ids together.
         unused_m = Model(wol_name+'_unused')
         nogene_rs, nogene_misc = set(), set()
         for rxn in m.reactions:
-            r_id = rxn.id
+            r_id = rxn.id.strip()
             #if r_id[0] == 'R':
             if rxn.gene_names or r_id in nem_xfer_to_wol: # I think the above is better.
                 wol_gene_names, nem_gene_names = [], []
@@ -44,10 +45,8 @@ def separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_
                         rxn.gene_names = nem_gene_names
                     elif rxn.id not in nem_dont_delete: # rxn found only in wolbachia. remove it completely.
                         nem_deleted_rxns.append(rxn.id)
-                        if dont_remove_wol_rxns == False:
-                            rxn.delete()
                 else: # rxn had no wolbachia gene names.
-                    if w_id not in unused_m.reactions:
+                    if w_id not in wm.reactions and w_id not in unused_m.reactions:
                         w_rxn = Reaction(w_id)
                         setup_wol_reaction(rxn, w_rxn, wol_gene_names)
                         unused_m.add_reaction(w_rxn)
@@ -63,6 +62,12 @@ def separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_
                         nogene_misc.add(r_id)
             else: # No gene evidence for reaction:
                 pass
+
+        if dont_remove_wol_rxns == False:
+            m.remove_reactions(nem_deleted_rxns)
+            #for r_id in nem_deleted_rxns:
+            #    m.reactions.get_by_id(r_id).delete()
+
         print('\n%i reactions removed and %i reactions modified from %s.' % (len(nem_deleted_rxns), len(nem_mod_rxns), m))
         print('%s created with %i reactions.' % (wm, len(wm.reactions)))
         print('%i "R" and %i non-"R" reaction not added.' % (len(nogene_rs), len(nogene_misc)))
@@ -93,7 +98,13 @@ def setup_wol_reaction(n_rxn, w_rxn, wol_gene_names):
     bounds = n_rxn.bounds
     if bounds[0] == bounds[1] == 0:
         bounds = (-1000, 1000)
-        print('Reaction %s was blocked; bounds were reset to %i/%i.' % (n_rxn.id, bounds[0], bounds[1]))
+        if '-->' in n_rxn.reaction:
+            bounds = (0, 1000)
+        elif '<--' in n_rxn.reaction:
+            bounds = (-1000, 0)
+        elif '<=>' not in n_rxn.reaction:
+            print('Reaction %s was blocked, and no identifiable arrow was found in the reaction string. Bounds were reset to %i/%i.' % (w_rxn.id, bounds[0], bounds[1]))
+
     w_rxn.bounds = bounds
     w_rxn.name = n_rxn.name
     w_rxn.objective_coefficient = n_rxn.objective_coefficient
@@ -116,9 +127,9 @@ out_nem_model_names = ['model_o_vol_4', 'model_b_mal_4']
 nem_dont_delete = set(['R00104', 'R00161'])
 nem_xfer_to_wol = set(['R01195'])
 # # #  Run-time options
-save_wol_models = False
-save_nem_models = False
-perform_gap_filling = 10 # False to not, otherwise a number indicating how many iterations. Performs gap-filling using all nematode reactions not already added to the wol model.
+save_wol_models = True
+save_nem_models = True
+perform_gap_filling = 5 # False to not, otherwise a number indicating how many iterations. Performs gap-filling using all nematode reactions not already added to the wol model.
 test_removed_wol_rxns = False # Check the effect of removing the wolbachia-only reactions
 
 
@@ -134,15 +145,20 @@ for m in in_models:
     fvas.append(flux_variability_analysis(m))
 wol_models, unused_models, unique_wol_ids = separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_names, test_removed_wol_rxns)
 
-if isinstance(perform_gap_filling, int):
+if perform_gap_filling != False and isinstance(perform_gap_filling, int):
     for wm, unused_m in zip(wol_models, unused_models):
-        print('\nPerforming gap-filling on %s...' % wm)
-        results = growMatch(wm, unused_m, iterations=perform_gap_filling)
-        # Check for duplicate reaction sets; these aren't useful.
-        for i, res in enumerate(results):
-            print('\nRun %i:' % (i+1))
-            for rxn in res:
-                print rxn.id
+        # check if it's already solvable.
+        wm.optimize()
+        if wm.solution.f < 0.5:
+            print('\nPerforming gap-filling on %s...' % wm)
+            results = growMatch(wm, unused_m, iterations=perform_gap_filling)
+            # Check for duplicate reaction sets; these aren't useful.
+            for i, res in enumerate(results):
+                print('\nRun %i:' % (i+1))
+                for rxn in res:
+                    print rxn.id
+        else:
+            print('\nNot performing gap-filling on %s; objective function is %.1f' % (wm, wm.solution.f))
 
 if test_removed_wol_rxns:
     for m, fva, r_ids in zip(in_models, fvas, unique_wol_ids):

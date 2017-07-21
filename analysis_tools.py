@@ -419,13 +419,15 @@ class ReactionVariances(object):
             labeled_conditions = zip(self.modified, r_fs)
             yield labeled_conditions, ind
 
+# TODO:
+# - If the bounds on to_modify are illegal based on reaction bounds, get a ZeroDivisionError. Should be checked and reported more sanely.
 
 if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
 
     to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fumarate -> malate', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
-    negative_modified = 'DIFFUSION_2'
+    negative_modified = []
     negative_measured = ['R01082_M', 'R00086_M']
     tight_bounds = False
 
@@ -443,7 +445,7 @@ if __name__ == '__main__':
         rv.negative_measured(negative_measured)
         rv.heatmaps_2D(to_display, include_objective=True, include_total_flux=True)
     if show_3D_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', -1.0, -501, 25), ('FA_SOURCE', 'Fatty acids', 5, 25, 6)]
+        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 501, 25), ('FA_SOURCE', 'Fatty acids', 5, 25, 6)]
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
         rv = ReactionVariances(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
         rv.negative_modified(negative_modified)

@@ -19,10 +19,10 @@ pathways_for_analysis = [
     ('Fundamental imports', [
         ('Glucose', ('CARBON_SOURCE','EX00031')),
         ('TAGs', ('FA_SOURCE',)),
-        ('Oxygen', ('DIFFUSION_2','EX00007'), -1)
+        ('Oxygen', ('DIFFUSION_2','EX00007'))
     ]),
     ('Waste exports', [
-        ('CO2', ('DIFFUSION_3','EX00011')),
+        ('CO2', ('DIFFUSION_3','EX00011'), -1),
         ('Lactate', ('R00703',), -1),
         ('Succinate', ('SINK_2',)),
         ('Acetate', ('SINK_3',)),
