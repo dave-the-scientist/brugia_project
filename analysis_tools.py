@@ -1,5 +1,5 @@
 import os, itertools
-from math import ceil, floor
+from math import ceil, floor, sqrt
 import numpy as np
 import cobra
 from read_excel import read_excel
@@ -7,7 +7,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 
-class ReactionVariances(object):
+class DiscreteModelResults(object):
     """Holds results of testing the model by varying the reaction bounds of a number of reactions.
 
     self.data: numpy.Matrix. The main data structure is an (n+1)-dimensional matrix, where n is the number of modified reactions. Each position in the matrix holds a 1-dimensional array, whose 0-th entry is the objective function flux at that condition, the 1-th entry is the total flux in the entire system at that condition, and the following values are the flux through each reaction in self.measured, sorted by the name of the reaction ID.
@@ -36,16 +36,24 @@ class ReactionVariances(object):
         self._run()
 
     # # # # #  Public methods. # # # # #
-    def get_flux(self, rxn_id):
-        ind = self._measured_ind[rxn_id]
-        return self._get_ith_measurement(ind)
-    def get_objective_flux(self):
+    def get_fluxes(self, measured_rxn, subslice=None):
+        if measured_rxn == self._obj_fxn_id:
+            fluxes = self.get_objective_fluxes() * self.measured_attrs[measured_rxn]['coefficient']
+        elif measured_rxn == self._total_flux_rxn_id:
+            fluxes = self.get_total_fluxes() * self.measured_attrs[measured_rxn]['coefficient']
+        else:
+            rxn_ind = self._measured_ind[measured_rxn]
+            fluxes = self._get_ith_measurement(rxn_ind) * self.measured_attrs[measured_rxn]['coefficient']
+        if subslice:
+            fluxes = fluxes[subslice]
+        return fluxes
+    def get_objective_fluxes(self):
         return self._get_ith_measurement(0)
-    def get_total_flux(self):
+    def get_total_fluxes(self):
         return self._get_ith_measurement(1)
 
     def negative_modified(self, modified_rxn):
-        """Report negative values for this reaction."""
+        """Takes either a reaction ID as a string, or a sequence of reaction ID strings. Causes all reaction IDs to be reported as negatives."""
         if isinstance(modified_rxn, basestring):
             if modified_rxn in self.modified_attrs:
                 self.modified_attrs[modified_rxn]['coefficient'] = -1.0
@@ -54,7 +62,7 @@ class ReactionVariances(object):
                 if m_rxn in self.modified_attrs:
                     self.modified_attrs[m_rxn]['coefficient'] = -1.0
     def negative_measured(self, measured_rxn):
-        """Report negative values for this reaction."""
+        """Takes either a reaction ID as a string, or a sequence of reaction ID strings. Causes all reaction IDs to be reported as negatives."""
         if isinstance(measured_rxn, basestring):
             if measured_rxn in self.measured_attrs:
                 self.measured_attrs[measured_rxn]['coefficient'] = -1.0
@@ -64,142 +72,6 @@ class ReactionVariances(object):
                     self.measured_attrs[m_rxn]['coefficient'] = -1.0
     def update_modified_attrs(self, modified_rxn, attr_dict):
         self.modified_attrs[modified_rxn].update(attr_dict)
-
-    def heatmaps_2D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=6, colormap='RdBu', smoothed=False, show_all_x_axes=False, show_all_y_axes=False):
-        if len(self.modified) != 2:
-            print('Error: heatmaps_2D() can only be called with 2 dimensional data.')
-            exit()
-        measured_rxns, interpolation = self._initialize_heatmap_options(measured_rxns, include_objective, include_total_flux, smoothed)
-        num_graphs = len(measured_rxns)
-        nrows, ncols = (num_graphs-1)//per_row + 1, min(num_graphs, per_row)
-        figsize = (ncols*graph_width, nrows*graph_height)
-        fig = plt.figure(figsize=figsize)
-        first_ax = None
-        for ind, m_rxn in enumerate(measured_rxns):
-            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
-            self._draw_heatmap(m_rxn, fig, ax, colormap, interpolation)
-            if ind == 0:
-                first_ax = ax
-            if not show_all_x_axes and ind < num_graphs - per_row: # Applies to all graphs except bottom in each column.
-                ax.tick_params('x', which='both', bottom='off', labelbottom='off')
-            if not show_all_y_axes and ind % per_row: # Applies to all graphs except left-most in each row.
-                ax.tick_params('y', which='both', left='off', labelleft='off')
-        plt.tight_layout()
-        plt.show()
-    def heatmaps_3D(self, measured_rxns, include_objective=False, include_total_flux=False, graph_width=1.65, graph_height=1.65, colormap='RdBu', smoothed=False, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=10, fig_top_padding=None):
-        """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps. colormap should be one of the 'Diverging colormaps' from https://matplotlib.org/examples/color/colormaps_reference.html. graph_colorbar_width_frac is a proportion of graph_width; so 0.25 means it is set to 25% of graph_width. row_label_width and row_squish do X. If not given a crude estimation will be used. row_label_rpad is the space between the label and the y-axis of the graph."""
-        if len(self.modified) != 3:
-            print('Error: heatmaps_3D() can only be called with 3 dimensional data.')
-            exit()
-        if isinstance(colormap, basestring):
-            colormap = getattr(matplotlib.cm, colormap)
-        measured_rxns, interpolation = self._initialize_heatmap_options(measured_rxns, include_objective, include_total_flux, smoothed)
-        dim3_label = self.modified_attrs[self.modified[2]]['label']
-        dim3_coef = self.modified_attrs[self.modified[2]]['coefficient']
-        dim3_steps = [s*dim3_coef for s in self._steps[2]]
-        nrows, ncols = len(dim3_steps), len(measured_rxns)
-        if row_label_width == None:
-            row_label_width = 0.48 + len(dim3_label) / 17.0
-        if graph_colorbar_width_frac == None:
-            graph_colorbar_width_frac = 0.27 + (ncols+1)**-1.85
-        num_graphs = nrows * ncols
-        figsize = (ncols*graph_width*(1+graph_colorbar_width_frac)+row_label_width, nrows*graph_height)
-
-        row_label_frac = row_label_width / figsize[0]
-        if row_squish == None:
-            row_squish = row_label_frac * 1.7
-        if fig_top_padding == None:
-            fig_top_padding = 0.4 / figsize[1]
-        wspace, hspace = 0.20, 0.06
-
-        if shared_col_colorbar:
-            colorbars = []
-            for m_rxn in measured_rxns:
-                flx = self._get_measured_fluxes(m_rxn)
-                min_flx, max_flx = flx.min(), flx.max()
-                #if m_rxn == '_objective_function': # TESTING
-                #    min_flx = 1.0
-                cmap = self._shiftedColorMap(colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
-                colorbars.append((cmap, min_flx, max_flx))
-        else:
-            colorbars = [(colormap, None, None)] * ncols
-        fig = plt.figure(figsize=figsize)
-        first_ax, min_flx, max_flx = None, None, None
-        for ind, m_rxn in enumerate(measured_rxns * len(dim3_steps)):
-            dim3_ind = ind//len(measured_rxns)
-            flx = self._get_measured_fluxes(m_rxn, [slice(None), slice(None), dim3_ind])
-            m_rxn_ind = ind % ncols
-            cmap, min_flx, max_flx = colorbars[m_rxn_ind]
-            if not shared_col_colorbar and shift_colorbar:
-                min_flx, max_flx = flx.min(), flx.max()
-                cmap = self._shiftedColorMap(colormap, min_flx, max_flx, name='shiftedcmap_%i'%ind)
-            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
-            self._draw_heatmap(m_rxn, fig, ax, cmap, interpolation, fluxes=flx, min_flux=min_flx, max_flux=max_flx)
-            if ind == 0:
-                first_ax = ax
-            if m_rxn_ind == 0:
-                row_label = '%s\n[%.1f]' % (dim3_label, dim3_steps[dim3_ind])
-                ax.annotate(row_label, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - row_label_rpad, 0), xycoords=ax.yaxis.label, textcoords='offset points', size='large', ha='right', va='center')
-            if not show_all_titles and ind >= ncols: # Applies to all graphs except top row.
-                ax.axes.set_title('')
-            if not show_all_x_axes and ind < num_graphs - ncols: # Applies to all graphs except bottom in each column.
-                ax.axes.get_xaxis().set_visible(False)
-                #ax.tick_params('x', which='both', bottom='off', labelbottom='off') # Hides the axis values, but keeps the axis title.
-            if not show_all_y_axes and ind % ncols: # Applies to all graphs except left-most in each row.
-                ax.axes.get_yaxis().set_visible(False)
-                #ax.tick_params('y', which='both', left='off', labelleft='off') # Hides the axis values, but keeps the axis title.
-        plt.tight_layout()
-        fig.subplots_adjust(left=row_squish, top=1-fig_top_padding, wspace=wspace, hspace=hspace)
-        plt.show()
-    def _initialize_heatmap_options(self, measured_rxns, include_objective, include_total_flux, smoothed):
-        for m_rxn in measured_rxns:
-            if m_rxn not in self.measured:
-                print('Error: the given reaction "%s" was not measured in the current data.' % m_rxn)
-                exit()
-        if include_total_flux:
-            measured_rxns = [self._total_flux_rxn_id] + measured_rxns
-        if include_objective:
-            measured_rxns = [self._obj_fxn_id] + measured_rxns
-        interpolation = 'spline36' if smoothed else 'none'
-        return measured_rxns, interpolation
-    def _draw_heatmap(self, measured_rxn, fig, axis, colormap, interpolation, fluxes=None, min_flux=None, max_flux=None):
-        min_flux_range = 5.0 # Affects the colouring range.
-        colorbar_label_size = 8 # Default was 10.
-        if fluxes is None:
-            fluxes = self._get_measured_fluxes(measured_rxn, subslice)
-        if min_flux == max_flux == None:
-            max_flux = max(abs(fluxes.max()), abs(fluxes.min()), min_flux_range)
-            min_flux = -max_flux
-        colorbar_ticks = [int(ceil(fluxes.min())), 0, int(floor(fluxes.max()))] # Annotates each subplot with its own min and max value ticks, even if drawn on the same scaled colorbar.
-        #colorbar_ticks = [int(min_flux), 0, int(max_flux)] # This if you want colorbars to all have the same ticks with shared_col_colorbar=True.
-        img = axis.imshow(fluxes, origin='lower', aspect='auto', vmin=min_flux, vmax=max_flux, cmap=colormap, interpolation=interpolation)
-        cbar = fig.colorbar(img, ax=axis, shrink=0.94, aspect=15, pad=0.03, ticks=colorbar_ticks)
-        cbar.ax.tick_params(labelsize=colorbar_label_size)
-        x_attrs = self.modified_attrs[self.modified[1]]
-        y_attrs = self.modified_attrs[self.modified[0]]
-        axis.set_title(self.measured_attrs[measured_rxn]['label'])
-        axis.set_xlabel(x_attrs['label'])
-        axis.set_ylabel(y_attrs['label'])
-        x_vals = [round(s*x_attrs['coefficient'], 1) for s in self._steps[1]]
-        x_mid, x_mid_ind = ((len(x_vals)+1) // 2) - 1, (len(x_vals) - 1) / 2.0
-        x_mid_val = round((x_vals[x_mid] + x_vals[-x_mid-1]) / 2.0, 1)
-        y_vals = [round(s*y_attrs['coefficient'], 1) for s in self._steps[0]]
-        y_mid, y_mid_ind = ((len(y_vals)+1) // 2) - 1, (len(y_vals) - 1) / 2.0
-        y_mid_val = round((y_vals[y_mid] + y_vals[-y_mid-1]) / 2.0, 1)
-        plt.sca(axis)
-        plt.xticks([0, x_mid_ind, len(x_vals)-1], [x_vals[0], x_mid_val, x_vals[-1]])
-        plt.yticks([0, y_mid_ind, len(y_vals)-1], [y_vals[0], y_mid_val, y_vals[-1]])
-    def _get_measured_fluxes(self, measured_rxn, subslice=None):
-        if measured_rxn == self._obj_fxn_id:
-            fluxes = self.get_objective_flux() * self.measured_attrs[measured_rxn]['coefficient']
-        elif measured_rxn == self._total_flux_rxn_id:
-            fluxes = self.get_total_flux() * self.measured_attrs[measured_rxn]['coefficient']
-        else:
-            fluxes = self.get_flux(measured_rxn) * self.measured_attrs[measured_rxn]['coefficient']
-        if subslice:
-            fluxes = fluxes[subslice]
-        return fluxes
-
 
     def save(self, file_path):
         pass
@@ -244,7 +116,6 @@ class ReactionVariances(object):
             elif rxn_f < 0:
                 rev_f = abs(rxn_f) + self.epsilon
                 rxn_f -= self.epsilon
-
             if self.tight_bounds:
                 fwd_f_lb, rev_f_lb = fwd_f-self.epsilon, rev_f-self.epsilon
                 rxn_lb, rxn_ub = rxn_f, rxn_f+self.epsilon
@@ -255,14 +126,6 @@ class ReactionVariances(object):
             rev_id = rxn_id + self._rxn_rev_suffix
             if rev_id in self._irr_m_rxn_ind:
                 self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f_lb, rev_f)
-            """
-            self.rev_lp.change_variable_bounds(self._rev_m_rxn_ind[rxn_id], rxn_f, rxn_f+self.epsilon)
-            self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rxn_id], fwd_f, fwd_f+self.epsilon)
-            rev_id = rxn_id + self._rxn_rev_suffix
-            if rev_id in self._irr_m_rxn_ind:
-                self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f, rev_f+self.epsilon)
-            """
-
     def _measure_reactions(self, data_ind, obj_f, total_f):
         self.data[data_ind][0] = obj_f
         self.data[data_ind][1] = total_f
@@ -360,8 +223,161 @@ class ReactionVariances(object):
         self._irr_m_rxn_ind = irr_m_rxn_ind
         self._rev_m_rxn_ind = rev_m_rxn_ind
 
-    # # # # #  Private methods: graphing. # # # # #
-    def _shiftedColorMap(self, cmap, min_val, max_val, name):
+    # # # # #  Private methods: misc. # # # # #
+    def _expand_steps(self, _min, _max, _steps):
+        if _steps == 1:
+            return [(_min+_max)/2.0]
+        delta = (_max - _min) / float(_steps - 1)
+        return [_min + delta*x for x in range(_steps)]
+    def _run_steps_iter(self):
+        # Generator that yields (list, index) at each iteration. The list: [(rxn1_id, rxn1_flux), (rxn2_id, rxn2_flux), ...] for each rxn in to_modify. Every reaction should be constrained to these flux values before one optimization and measurement. The index indicates where the measurements should be stored in self.data.
+        modify_conditions = itertools.product(*self._steps)
+        data_inds = itertools.product( *[range(len(s)) for s in self._steps] )
+        for r_fs, ind in itertools.izip(modify_conditions, data_inds):
+            labeled_conditions = zip(self.modified, r_fs)
+            yield labeled_conditions, ind
+
+
+class DmrVisualization(object):
+    def __init__(self, colormap='RdBu', interpolation=False):
+        """colormap should be one of the 'Diverging colormaps' from https://matplotlib.org/examples/color/colormaps_reference.html. interpolation is 'none' by default or 'spline36' if interpolation==True; a custom value can also be passed as the value of smoothed."""
+        self.colormap = getattr(matplotlib.cm, colormap) if isinstance(colormap, basestring) else colormap
+        self.interpolation = 'spline36' if interpolation==True else 'none' if interpolation==False else interpolation
+    # # #  Graphing functions
+    def heatmaps_2var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=6, show_all_x_axes=False, show_all_y_axes=False):
+        if len(dmr.modified) != 2:
+            print('Error: heatmaps_2var() can only be called with 2 dimensional data.')
+            exit()
+        measured_rxns = self._expand_measured_reactions(dmr, measured_rxns, include_objective, include_total_flux)
+        num_graphs = len(measured_rxns)
+        nrows, ncols = (num_graphs-1)//per_row + 1, min(num_graphs, per_row)
+        figsize = (ncols*graph_width, nrows*graph_height)
+        fig = plt.figure(figsize=figsize)
+        first_ax = None
+        for ind, m_rxn in enumerate(measured_rxns):
+            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
+            self._draw_heatmap(dmr, m_rxn, fig, ax, self.colormap)
+            if ind == 0:
+                first_ax = ax
+            if not show_all_x_axes and ind < num_graphs - per_row: # Applies to all graphs except bottom in each column.
+                ax.tick_params('x', which='both', bottom='off', labelbottom='off')
+            if not show_all_y_axes and ind % per_row: # Applies to all graphs except left-most in each row.
+                ax.tick_params('y', which='both', left='off', labelleft='off')
+        plt.tight_layout()
+        plt.show()
+
+    def heatmaps_3var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=1.65, graph_height=1.65, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=10, fig_top_padding=None):
+        """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps. graph_colorbar_width_frac is a proportion of graph_width; so 0.25 means it is set to 25% of graph_width. row_label_width and row_squish do X. If not given a crude estimation will be used. row_label_rpad is the space between the label and the y-axis of the graph."""
+        if len(dmr.modified) != 3:
+            print('Error: heatmaps_3var() can only be called with 3 dimensional data.')
+            exit()
+        measured_rxns = self._expand_measured_reactions(dmr, measured_rxns, include_objective, include_total_flux)
+        dim3_label = dmr.modified_attrs[dmr.modified[2]]['label']
+        dim3_coef = dmr.modified_attrs[dmr.modified[2]]['coefficient']
+        dim3_steps = [s*dim3_coef for s in dmr._steps[2]][::-1] # reversed so bottom row is first dim3 step, isntead of top row.
+        nrows, ncols = len(dim3_steps), len(measured_rxns)
+        num_graphs = nrows * ncols
+        figsize, row_squish, fig_top_padding, wspace, hspace = self._calculate_3var_size_parameters(nrows, ncols, graph_width, graph_height, dim3_label, row_label_width, graph_colorbar_width_frac, row_squish, fig_top_padding)
+        # Document what the size parameters do, inc wspace & hspace (should those be modifiable?)
+        if shared_col_colorbar:
+            colorbars = []
+            for m_rxn in measured_rxns:
+                flx = dmr.get_fluxes(m_rxn)
+                min_flx, max_flx = flx.min(), flx.max()
+                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
+                colorbars.append((cmap, min_flx, max_flx))
+        else:
+            colorbars = [(self.colormap, None, None)] * ncols
+        fig = plt.figure(figsize=figsize)
+        fig.canvas.set_window_title(dmr.name) # Make sure this, and similar adjustments are done for all graph functions.
+        first_ax, min_flx, max_flx = None, None, None
+        for ind, m_rxn in enumerate(measured_rxns * len(dim3_steps)):
+            dim3_ind = ind//len(measured_rxns)
+            flx = dmr.get_fluxes(m_rxn, [slice(None), slice(None), len(dim3_steps)-1-dim3_ind]) # the len-1-ind is needed so bottom row is first dim3 step, instead of top row.
+            m_rxn_ind = ind % ncols
+            cmap, min_flx, max_flx = colorbars[m_rxn_ind]
+            if not shared_col_colorbar and shift_colorbar:
+                min_flx, max_flx = flx.min(), flx.max()
+                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='shiftedcmap_%i'%ind)
+            ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
+            self._draw_heatmap(dmr, m_rxn, fig, ax, cmap, fluxes=flx, min_flux=min_flx, max_flux=max_flx)
+            if ind == 0:
+                first_ax = ax
+            if m_rxn_ind == 0:
+                row_label = '%s\n[%.1f]' % (dim3_label, dim3_steps[dim3_ind])
+                ax.annotate(row_label, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - row_label_rpad, 0), xycoords=ax.yaxis.label, textcoords='offset points', size='large', ha='right', va='center')
+            if not show_all_titles and ind >= ncols: # Applies to all graphs except top row.
+                ax.axes.set_title('')
+            if not show_all_x_axes and ind < num_graphs - ncols: # Applies to all graphs except bottom in each column.
+                ax.axes.get_xaxis().set_visible(False)
+                #ax.tick_params('x', which='both', bottom='off', labelbottom='off') # Hides the axis values, but keeps the axis title.
+            if not show_all_y_axes and ind % ncols: # Applies to all graphs except left-most in each row.
+                ax.axes.get_yaxis().set_visible(False)
+                #ax.tick_params('y', which='both', left='off', labelleft='off') # Hides the axis values, but keeps the axis title.
+        plt.tight_layout()
+        fig.subplots_adjust(left=row_squish, top=1-fig_top_padding, wspace=wspace, hspace=hspace)
+        plt.show()
+
+    # # #  Main private graphing function
+    def _draw_heatmap(self, dmr, measured_rxn, fig, axis, colormap, fluxes=None, min_flux=None, max_flux=None):
+        min_flux_range = 5.0 # Affects the colouring range.
+        colorbar_label_size = 8 # Default was 10.
+        if fluxes is None:
+            fluxes = dmr.get_fluxes(measured_rxn)
+        if min_flux == max_flux == None:
+            max_flux = max(abs(fluxes.max()), abs(fluxes.min()), min_flux_range)
+            min_flux = -max_flux
+        colorbar_ticks = [int(ceil(fluxes.min())), 0, int(floor(fluxes.max()))] # Annotates each subplot with its own min and max value ticks, even if drawn on the same scaled colorbar.
+        #colorbar_ticks = [int(min_flux), 0, int(max_flux)] # This if you want colorbars to all have the same ticks with shared_col_colorbar=True.
+        img = axis.imshow(fluxes, origin='lower', aspect='auto', vmin=min_flux, vmax=max_flux, cmap=colormap, interpolation=self.interpolation)
+        cbar = fig.colorbar(img, ax=axis, shrink=0.94, aspect=15, pad=0.03, ticks=colorbar_ticks)
+        cbar.ax.tick_params(labelsize=colorbar_label_size)
+        x_attrs = dmr.modified_attrs[dmr.modified[1]]
+        y_attrs = dmr.modified_attrs[dmr.modified[0]]
+        axis.set_title(dmr.measured_attrs[measured_rxn]['label'])
+        axis.set_xlabel(x_attrs['label'])
+        axis.set_ylabel(y_attrs['label'])
+        x_vals = [round(s*x_attrs['coefficient'], 1) for s in dmr._steps[1]]
+        x_mid, x_mid_ind = ((len(x_vals)+1) // 2) - 1, (len(x_vals) - 1) / 2.0
+        x_mid_val = round((x_vals[x_mid] + x_vals[-x_mid-1]) / 2.0, 1)
+        y_vals = [round(s*y_attrs['coefficient'], 1) for s in dmr._steps[0]]
+        y_mid, y_mid_ind = ((len(y_vals)+1) // 2) - 1, (len(y_vals) - 1) / 2.0
+        y_mid_val = round((y_vals[y_mid] + y_vals[-y_mid-1]) / 2.0, 1)
+        plt.sca(axis)
+        plt.xticks([0, x_mid_ind, len(x_vals)-1], [x_vals[0], x_mid_val, x_vals[-1]])
+        plt.yticks([0, y_mid_ind, len(y_vals)-1], [y_vals[0], y_mid_val, y_vals[-1]])
+        def format_imshow_coords(x, y):
+            x_val = dmr._steps[1][int(x + 0.5)]
+            y_val = dmr._steps[0][int(y + 0.5)]
+            x_label = x_attrs['label']
+            y_label = y_attrs['label']
+            return '%s=%.2f, %s=%.2f' % (x_label, x_val, y_label, y_val)
+        axis.format_coord = format_imshow_coords
+    # # #  Misc private graphing functions
+    def _expand_measured_reactions(self, dmr, measured_rxns, include_objective, include_total_flux):
+        for m_rxn in measured_rxns:
+            if m_rxn not in dmr.measured:
+                print('Error: reaction "%s" was not measured in the given DiscreteModelResults.' % m_rxn)
+                exit()
+        if include_total_flux:
+            measured_rxns = [dmr._total_flux_rxn_id] + measured_rxns
+        if include_objective:
+            measured_rxns = [dmr._obj_fxn_id] + measured_rxns
+        return measured_rxns
+    def _calculate_3var_size_parameters(self, nrows, ncols, graph_width, graph_height, dim3_label, row_label_width, graph_colorbar_width_frac, row_squish, fig_top_padding):
+        if row_label_width == None:
+            row_label_width = 0.48 + len(dim3_label) / 17.0
+        if graph_colorbar_width_frac == None:
+            graph_colorbar_width_frac = 0.27 + (ncols+1)**-1.85
+        figsize = (ncols*graph_width*(1+graph_colorbar_width_frac)+row_label_width, nrows*graph_height)
+        if row_squish == None:
+            row_label_frac = row_label_width / figsize[0]
+            row_squish = row_label_frac * 1.7
+        if fig_top_padding == None:
+            fig_top_padding = 0.4 / figsize[1]
+        wspace, hspace = 0.20, 0.06
+        return figsize, row_squish, fig_top_padding, wspace, hspace
+    def _shiftedColorMap(self, cmap, min_val, max_val, name, epsilon=0.001):
         '''Function to offset the "center" of a colormap. Useful for data with a negative min and positive max and you want the middle of the colormap's dynamic range to be at zero. Adapted from https://stackoverflow.com/questions/7404116/defining-the-midpoint-of-a-colormap-in-matplotlib
 
         Input
@@ -378,15 +394,18 @@ class ReactionVariances(object):
               should be set to  1 - 5/(5 + 15)) or 0.75
           stop : Offset from highets point in the colormap's range.
               Defaults to 1.0 (no upper ofset). Should be between
-              `midpoint` and 1.0.'''
-        epsilon = 0.0001
+              `midpoint` and 1.0.
+        Note: If areas with value of zero are appearing as an extreme colour instead of white
+          (or the middle colour), try increasing the value of epsilon.'''
         start, stop = 0.0, 1.0
-        min_val, max_val = min(0.0, min_val), max(0.0, max_val)
-        midpoint = 1.0 - max_val/(max_val + abs(min_val))
-
-
-        # don't think works if min and max are > 0.
-
+        #if abs(min_val) < 0.01:
+        #    min_val = 0.0
+        min_val, max_val = min(0.0, min_val), max(0.0, max_val) # Ensures 0 is included on the map.
+        if max_val == min_val == 0:
+            midpoint = 0.5
+        else:
+            midpoint = 1.0 - max_val/(max_val + abs(min_val))
+            # don't think works if min and max are > 0. EDIT: What? Seems like it does.
         cdict = {'red': [], 'green': [], 'blue': [], 'alpha': []}
         # regular index to compute the colors
         reg_index = np.linspace(start, stop, 257)
@@ -405,49 +424,79 @@ class ReactionVariances(object):
         plt.register_cmap(cmap=newcmap)
         return newcmap
 
-    # # # # #  Private methods: misc. # # # # #
-    def _expand_steps(self, _min, _max, _steps):
-        if _steps == 1:
-            return [(_min+_max)/2.0]
-        delta = (_max - _min) / float(_steps - 1)
-        return [_min + delta*x for x in range(_steps)]
-    def _run_steps_iter(self):
-        # Generator that yields (list, index) at each iteration. The list: [(rxn1_id, rxn1_flux), (rxn2_id, rxn2_flux), ...] for each rxn in to_modify. Every reaction should be constrained to these flux values before one optimization and measurement. The index indicates where the measurements should be stored in self.data.
-        modify_conditions = itertools.product(*self._steps)
-        data_inds = itertools.product( *[range(len(s)) for s in self._steps] )
-        for r_fs, ind in itertools.izip(modify_conditions, data_inds):
-            labeled_conditions = zip(self.modified, r_fs)
-            yield labeled_conditions, ind
+
+def _flux_fva_to_rgb_frac(val, fva_range, min_val, max_val, max_fva_range, low_col, mid_col, high_col, var_col):
+    """imshow function expects a set of float values, representing the 0-255 r/g/b integers.
+    Uses transform on the fva_p which accelerates the colour towards var_col: fva_t=0.5 is a sqrt, 0.8 is less drastic, 0.3 is very drastic."""
+    fva_t = 0.5
+    if val == 0.0:
+        val_rgb = mid_col
+    else:
+        if val > 0:
+            val_p = val / float(max_val)
+            delta_col = [float(c-m) for c,m in zip(high_col, mid_col)]
+        else:
+            val_p = abs(val) / abs(float(min_val))
+            delta_col = [float(c-m) for c,m in zip(low_col, mid_col)]
+        val_rgb = [d*val_p + c for d,c in zip(delta_col, mid_col)]
+    fva_p = fva_range / float(max_fva_range)
+    fva_p = fva_p**(fva_t)
+    delta_var = [float(v-c) for v,c in zip(var_col, val_rgb)]
+    rgb = [(d*fva_p + c)/255.0 for d,c in zip(delta_var, val_rgb)]
+    return rgb
+def _expand_steps(_min, _max, _steps):
+    if _steps == 1:
+        return [(_min+_max)/2.0]
+    delta = (_max - _min) / float(_steps - 1)
+    return [_min + delta*x for x in range(_steps)]
 
 # TODO:
 # - If the bounds on to_modify are illegal based on reaction bounds, get a ZeroDivisionError. Should be checked and reported more sanely.
 
 if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_names = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx']
+    model_names = ['model_b_mal_3.5.xlsx', 'model_b_mal_4.5-wip.xlsx']
 
     to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fumarate -> malate', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
     negative_modified = []
     negative_measured = ['R01082_M', 'R00086_M']
     tight_bounds = False
 
-    show_2D_heatmap = False
-    show_3D_heatmap = True
+    show_2var_heatmap = False
+    show_3var_heatmap = True
+    show_3var_fva_heatmap = False
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
-    models = [read_excel(m_file, verbose=False) for m_file in model_files]
+    models = [read_excel(m_file, verbose=False) for m_file in model_files][1:]
 
-    if show_2D_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', -0.0, -500, 20)]
+    if show_2var_heatmap:
+        to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', 0, 500, 20)]
         to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
-        rv = ReactionVariances(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
-        rv.negative_modified(negative_modified)
-        rv.negative_measured(negative_measured)
-        rv.heatmaps_2D(to_display, include_objective=True, include_total_flux=True)
-    if show_3D_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 501, 25), ('FA_SOURCE', 'Fatty acids', 5, 25, 6)]
+        results = DiscreteModelResults(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
+        results.negative_modified(negative_modified)
+        results.negative_measured(negative_measured)
+        vis = DmrVisualization()
+        vis.heatmaps_2var(results, to_display, include_objective=True, include_total_flux=True)
+    if show_3var_heatmap:
+        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 25), ('FA_SOURCE', 'Fatty acids', 5, 35, 6)]
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
-        rv = ReactionVariances(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
-        rv.negative_modified(negative_modified)
-        rv.negative_measured(negative_measured)
-        rv.heatmaps_3D(to_display, include_objective=True, include_total_flux=False)
+        for model in models:
+            results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
+            results.negative_modified(negative_modified)
+            results.negative_measured(negative_measured)
+            vis = DmrVisualization()
+            vis.heatmaps_3var(results, to_display, include_objective=True, include_total_flux=False)
+    if show_3var_fva_heatmap:
+        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 10), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 10), ('FA_SOURCE', 'Fatty acids', 10, 35, 4)]
+        to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
+        low_col, mid_col, high_col, var_col = [255,0,0], [255,255,255], [0,0,255], [0,0,0]
+        min_val, max_val, max_fva_range = -1000, 1000, 2000
+        num_val, num_fva = 21, 21
+        m = np.zeros([num_val,num_fva,3]) # the 3 is for RGB
+        for x in range(num_fva):
+            fva_range = x / float(num_fva - 1) * max_fva_range
+            for y, val in enumerate(_expand_steps(min_val, max_val, num_val)):
+                rgba = _flux_fva_to_rgb_frac(val, fva_range, min_val, max_val, max_fva_range, low_col, mid_col, high_col, var_col)
+                m[y,x] = rgba
+        plt.imshow(m, origin='lower', extent=(0,max_fva_range,min_val,max_val))
+        plt.show()

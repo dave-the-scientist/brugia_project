@@ -509,7 +509,7 @@ def run():
 
     # # #  Run-time options
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_files = ['model_o_vol_3.5.xlsx', 'model_b_mal_3.5.xlsx', 'model_wBm_4-wip.xlsx']
+    model_files = ['model_b_mal_4.5-wip.xlsx', 'model_o_vol_4.5-wip.xlsx']
     mtb_cmp_str = '%s_wip.xlsx'
     verbose = True
     topology_analysis = False

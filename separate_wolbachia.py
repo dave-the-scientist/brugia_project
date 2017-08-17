@@ -10,8 +10,22 @@ def separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_
     wol_gene_prefs = ('Wolbachia', 'AAW')
     wol_models, unused_models, unique_wol_ids = [], [], []
     for m, wol_unique_model, wol_name in zip(in_models, wol_unique_models, wol_model_names):
-        nem_mod_rxns, nem_deleted_rxns = [], []
+        nem_mod_rxns, nem_deleted_rxns, wol_mtbs, wol_ids = [], [], [], set()
         wm = Model(wol_name, name=wol_name)
+        for mtb in m.metabolites:
+            if mtb.id[0] not in ('G', 'C', 'M'):
+                continue
+            if mtb.id[0] == 'G':
+                w_mtb_id = 'W' + mtb.id
+            else:
+                w_mtb_id = 'W%s' % mtb.id[1:]
+            if w_mtb_id in wol_ids:
+                continue
+            else:
+                wol_ids.add(w_mtb_id)
+            w_mtb = Metabolite(w_mtb_id, name=mtb.name, compartment='w')
+            wol_mtbs.append(w_mtb)
+        wm.add_metabolites(wol_mtbs)
         wm += wol_common_model
         wm += wol_unique_model
         # These two steps are likely why half of the mtbs are unnamed.
@@ -62,11 +76,16 @@ def separate_wol_rxns(in_models, wol_unique_models, wol_common_model, wol_model_
                         nogene_misc.add(r_id)
             else: # No gene evidence for reaction:
                 pass
+        wol_mtb_to_keep = set()
+        for rxn in wm.reactions:
+            for mtb in rxn.metabolites:
+                wol_mtb_to_keep.add(mtb.id)
+        for mtb in wm.metabolites:
+            if mtb.id not in wol_mtb_to_keep:
+                mtb.remove_from_model(method='subtractive')
 
         if dont_remove_wol_rxns == False:
             m.remove_reactions(nem_deleted_rxns)
-            #for r_id in nem_deleted_rxns:
-            #    m.reactions.get_by_id(r_id).delete()
 
         print('\n%i reactions removed and %i reactions modified from %s.' % (len(nem_deleted_rxns), len(nem_mod_rxns), m))
         print('%s created with %i reactions.' % (wm, len(wm.reactions)))
@@ -124,8 +143,8 @@ in_wol_unique_files = ['partial_wOv_manual_4.xlsx', 'partial_wBm_manual_4.xlsx']
 in_wol_common_file = 'partial_wol_common_4.xlsx'
 wol_model_names = ['model_wOv_4', 'model_wBm_4']
 out_nem_model_names = ['model_o_vol_4', 'model_b_mal_4']
-nem_dont_delete = set(['R00104', 'R00161'])
-nem_xfer_to_wol = set(['R01195'])
+nem_dont_delete = set(['R00104', 'R00161', 'R05332'])
+nem_xfer_to_wol = set(['R01195', 'R05636'])
 # # #  Run-time options
 save_wol_models = True
 save_nem_models = True
@@ -168,11 +187,11 @@ if test_removed_wol_rxns:
             print('%i loss [%s]: %s' % (d[0], d[1][0], ', '.join(x for x in d[3]) ))
 
 if save_wol_models:
-    out_wol_model_files = [os.path.join(files_dir, '%s-wip.xlsx'%m_name) for m_name in wol_model_names]
+    out_wol_model_files = [os.path.join(files_dir, '%s-sep.xlsx'%m_name) for m_name in wol_model_names]
     for wm, m_file in zip(wol_models, out_wol_model_files):
         write_excel(wm, m_file)
     # add in common reactions.
 if save_nem_models:
-    out_nem_model_files = [os.path.join(files_dir, '%s-wip.xlsx'%m_name) for m_name in out_nem_model_names]
+    out_nem_model_files = [os.path.join(files_dir, '%s-sep.xlsx'%m_name) for m_name in out_nem_model_names]
     for m, m_file in zip(in_models, out_nem_model_files):
         write_excel(m, m_file)
