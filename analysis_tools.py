@@ -131,12 +131,14 @@ class DiscreteModelResults(object):
         self.data[data_ind][1] = total_f
         for i, rxn_id in enumerate(self.measured):
             if obj_f == 0:
-                val = 0
+                val = 0.0
             else:
                 val = self.irr_model.reactions.get_by_id(rxn_id).x
                 rev_id = rxn_id + self._rxn_rev_suffix
-                if val == 0 and rev_id in self.irr_model.reactions:
+                if abs(val) < self.epsilon and rev_id in self.irr_model.reactions:
                     val = -self.irr_model.reactions.get_by_id(rev_id).x
+            if abs(val) < self.epsilon:
+                val = 0.0
             self.data[data_ind][i+2] = val
     def _get_ith_measurement(self, ind):
         slc = [slice(None)] * len(self.data.shape)
@@ -244,7 +246,7 @@ class DmrVisualization(object):
         self.colormap = getattr(matplotlib.cm, colormap) if isinstance(colormap, basestring) else colormap
         self.interpolation = 'spline36' if interpolation==True else 'none' if interpolation==False else interpolation
     # # #  Graphing functions
-    def heatmaps_2var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=6, show_all_x_axes=False, show_all_y_axes=False):
+    def heatmaps_2var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=3.0, graph_height=2.5, per_row=6, shift_colorbar=True, show_all_x_axes=False, show_all_y_axes=False):
         if len(dmr.modified) != 2:
             print('Error: heatmaps_2var() can only be called with 2 dimensional data.')
             exit()
@@ -253,16 +255,28 @@ class DmrVisualization(object):
         nrows, ncols = (num_graphs-1)//per_row + 1, min(num_graphs, per_row)
         figsize = (ncols*graph_width, nrows*graph_height)
         fig = plt.figure(figsize=figsize)
-        first_ax = None
+        fig.canvas.set_window_title(dmr.name)
+        first_ax, min_flx, max_flx, cmap = None, None, None, self.colormap
+        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[1]]['coefficient'], dmr._steps[1])
+        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[0]]['coefficient'], dmr._steps[0])
         for ind, m_rxn in enumerate(measured_rxns):
+            flx = dmr.get_fluxes(m_rxn)
+            show_x_label, show_x_ticks, show_y_label, show_y_ticks = True, True, True, True
+            if not show_all_x_axes and ind < num_graphs - per_row: # Applies to all graphs except bottom in each column.
+                show_x_label, show_x_ticks = False, False
+            if not show_all_y_axes and ind % per_row: # Applies to all graphs except left-most in each row.
+                show_y_label, show_y_ticks = False, False
+            if shift_colorbar:
+                min_flx, max_flx = flx.min(), flx.max()
+                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
             ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
-            self._draw_heatmap(dmr, m_rxn, fig, ax, self.colormap)
+            #self._draw_heatmap(dmr, m_rxn, fig, ax, cmap, fluxes=flx, min_flux=min_flx, max_flux=max_flx)
+            self._draw_heatmap(dmr, m_rxn, fig, ax, cmap, fluxes=flx, min_flux=min_flx, max_flux=max_flx, show_title=True, show_x_label=show_x_label, show_x_ticks=show_x_ticks, show_y_label=show_y_label, show_y_ticks=show_y_ticks)
             if ind == 0:
                 first_ax = ax
-            if not show_all_x_axes and ind < num_graphs - per_row: # Applies to all graphs except bottom in each column.
-                ax.tick_params('x', which='both', bottom='off', labelbottom='off')
-            if not show_all_y_axes and ind % per_row: # Applies to all graphs except left-most in each row.
-                ax.tick_params('y', which='both', left='off', labelleft='off')
+                plt.sca(ax)
+                plt.xticks(x_tick_inds, x_tick_vals) # These only need to be called...
+                plt.yticks(y_tick_inds, y_tick_vals) # ... once for all shared graphs.
         plt.tight_layout()
         plt.show()
 
@@ -289,37 +303,41 @@ class DmrVisualization(object):
         else:
             colorbars = [(self.colormap, None, None)] * ncols
         fig = plt.figure(figsize=figsize)
-        fig.canvas.set_window_title(dmr.name) # Make sure this, and similar adjustments are done for all graph functions.
+        fig.canvas.set_window_title(dmr.name)
         first_ax, min_flx, max_flx = None, None, None
+        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[1]]['coefficient'], dmr._steps[1])
+        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[0]]['coefficient'], dmr._steps[0])
         for ind, m_rxn in enumerate(measured_rxns * len(dim3_steps)):
-            dim3_ind = ind//len(measured_rxns)
-            flx = dmr.get_fluxes(m_rxn, [slice(None), slice(None), len(dim3_steps)-1-dim3_ind]) # the len-1-ind is needed so bottom row is first dim3 step, instead of top row.
             m_rxn_ind = ind % ncols
-            cmap, min_flx, max_flx = colorbars[m_rxn_ind]
-            if not shared_col_colorbar and shift_colorbar:
-                min_flx, max_flx = flx.min(), flx.max()
-                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='shiftedcmap_%i'%ind)
+            dim3_ind = ind//len(measured_rxns)
             ax = fig.add_subplot(nrows, ncols, ind+1, sharex=first_ax, sharey=first_ax)
-            self._draw_heatmap(dmr, m_rxn, fig, ax, cmap, fluxes=flx, min_flux=min_flx, max_flux=max_flx)
-            if ind == 0:
-                first_ax = ax
+            flx = dmr.get_fluxes(m_rxn, [slice(None), slice(None), len(dim3_steps)-1-dim3_ind]) # the len-1-ind is needed so bottom row is first dim3 step, instead of top row.
+            show_title, show_x_label, show_x_ticks, show_y_label, show_y_ticks = True, True, True, True, True
             if m_rxn_ind == 0:
                 row_label = '%s\n[%.1f]' % (dim3_label, dim3_steps[dim3_ind])
                 ax.annotate(row_label, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - row_label_rpad, 0), xycoords=ax.yaxis.label, textcoords='offset points', size='large', ha='right', va='center')
             if not show_all_titles and ind >= ncols: # Applies to all graphs except top row.
-                ax.axes.set_title('')
+                show_title = False
             if not show_all_x_axes and ind < num_graphs - ncols: # Applies to all graphs except bottom in each column.
-                ax.axes.get_xaxis().set_visible(False)
-                #ax.tick_params('x', which='both', bottom='off', labelbottom='off') # Hides the axis values, but keeps the axis title.
+                show_x_label, show_x_ticks = False, False
             if not show_all_y_axes and ind % ncols: # Applies to all graphs except left-most in each row.
-                ax.axes.get_yaxis().set_visible(False)
-                #ax.tick_params('y', which='both', left='off', labelleft='off') # Hides the axis values, but keeps the axis title.
+                show_y_label, show_y_ticks = False, False
+            cmap, min_flx, max_flx = colorbars[m_rxn_ind]
+            if not shared_col_colorbar and shift_colorbar:
+                min_flx, max_flx = flx.min(), flx.max()
+                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='shiftedcmap_%i'%ind)
+            self._draw_heatmap(dmr, m_rxn, fig, ax, cmap, fluxes=flx, min_flux=min_flx, max_flux=max_flx, show_title=show_title, show_x_label=show_x_label, show_x_ticks=show_x_ticks, show_y_label=show_y_label, show_y_ticks=show_y_ticks)
+            if ind == 0:
+                first_ax = ax
+                plt.sca(ax)
+                plt.xticks(x_tick_inds, x_tick_vals) # These only need to be called...
+                plt.yticks(y_tick_inds, y_tick_vals) # ... once for all shared graphs.
         plt.tight_layout()
         fig.subplots_adjust(left=row_squish, top=1-fig_top_padding, wspace=wspace, hspace=hspace)
         plt.show()
 
     # # #  Main private graphing function
-    def _draw_heatmap(self, dmr, measured_rxn, fig, axis, colormap, fluxes=None, min_flux=None, max_flux=None):
+    def _draw_heatmap(self, dmr, measured_rxn, fig, axis, colormap, fluxes=None, min_flux=None, max_flux=None, show_title=True, show_x_label=True, show_x_ticks=True, show_y_label=True, show_y_ticks=True):
         min_flux_range = 5.0 # Affects the colouring range.
         colorbar_label_size = 8 # Default was 10.
         if fluxes is None:
@@ -327,32 +345,43 @@ class DmrVisualization(object):
         if min_flux == max_flux == None:
             max_flux = max(abs(fluxes.max()), abs(fluxes.min()), min_flux_range)
             min_flux = -max_flux
+        if show_title == True:
+            title = dmr.measured_attrs[measured_rxn]['label']
+        else:
+            title = None
         colorbar_ticks = [int(ceil(fluxes.min())), 0, int(floor(fluxes.max()))] # Annotates each subplot with its own min and max value ticks, even if drawn on the same scaled colorbar.
-        #colorbar_ticks = [int(min_flux), 0, int(max_flux)] # This if you want colorbars to all have the same ticks with shared_col_colorbar=True.
         img = axis.imshow(fluxes, origin='lower', aspect='auto', vmin=min_flux, vmax=max_flux, cmap=colormap, interpolation=self.interpolation)
         cbar = fig.colorbar(img, ax=axis, shrink=0.94, aspect=15, pad=0.03, ticks=colorbar_ticks)
         cbar.ax.tick_params(labelsize=colorbar_label_size)
+        self._format_graph(dmr, axis, title, show_x_label, show_x_ticks, show_y_label, show_y_ticks)
+
+    def _format_graph(self, dmr, axis, title, show_x_label, show_x_ticks, show_y_label, show_y_ticks):
         x_attrs = dmr.modified_attrs[dmr.modified[1]]
         y_attrs = dmr.modified_attrs[dmr.modified[0]]
-        axis.set_title(dmr.measured_attrs[measured_rxn]['label'])
-        axis.set_xlabel(x_attrs['label'])
-        axis.set_ylabel(y_attrs['label'])
-        x_vals = [round(s*x_attrs['coefficient'], 1) for s in dmr._steps[1]]
-        x_mid, x_mid_ind = ((len(x_vals)+1) // 2) - 1, (len(x_vals) - 1) / 2.0
-        x_mid_val = round((x_vals[x_mid] + x_vals[-x_mid-1]) / 2.0, 1)
-        y_vals = [round(s*y_attrs['coefficient'], 1) for s in dmr._steps[0]]
-        y_mid, y_mid_ind = ((len(y_vals)+1) // 2) - 1, (len(y_vals) - 1) / 2.0
-        y_mid_val = round((y_vals[y_mid] + y_vals[-y_mid-1]) / 2.0, 1)
-        plt.sca(axis)
-        plt.xticks([0, x_mid_ind, len(x_vals)-1], [x_vals[0], x_mid_val, x_vals[-1]])
-        plt.yticks([0, y_mid_ind, len(y_vals)-1], [y_vals[0], y_mid_val, y_vals[-1]])
+        if title != None:
+            axis.set_title(title)
+        if show_x_label:
+            axis.set_xlabel(x_attrs['label'])
+        if show_y_label:
+            axis.set_ylabel(y_attrs['label'])
+        if not show_x_ticks:
+            axis.tick_params('x', which='both', bottom='off', labelbottom='off')
+        if not show_y_ticks:
+            axis.tick_params('y', which='both', left='off', labelleft='off')
         def format_imshow_coords(x, y):
+            # Defines the mouseover text.
             x_val = dmr._steps[1][int(x + 0.5)]
             y_val = dmr._steps[0][int(y + 0.5)]
             x_label = x_attrs['label']
             y_label = y_attrs['label']
             return '%s=%.2f, %s=%.2f' % (x_label, x_val, y_label, y_val)
-        axis.format_coord = format_imshow_coords
+        axis.format_coord = format_imshow_coords # Sets the mouseover text.
+    def _generate_axis_ticks(self, coef, steps):
+        ax_vals = [round(s*coef, 1) for s in steps]
+        ax_mid, ax_mid_ind = ((len(ax_vals)+1) // 2) - 1, (len(ax_vals) - 1) / 2.0
+        ax_mid_val = round((ax_vals[ax_mid] + ax_vals[-ax_mid-1]) / 2.0, 1)
+        return [0, ax_mid_ind, len(ax_vals)-1], [ax_vals[0], ax_mid_val, ax_vals[-1]]
+
     # # #  Misc private graphing functions
     def _expand_measured_reactions(self, dmr, measured_rxns, include_objective, include_total_flux):
         for m_rxn in measured_rxns:
@@ -398,8 +427,6 @@ class DmrVisualization(object):
         Note: If areas with value of zero are appearing as an extreme colour instead of white
           (or the middle colour), try increasing the value of epsilon.'''
         start, stop = 0.0, 1.0
-        #if abs(min_val) < 0.01:
-        #    min_val = 0.0
         min_val, max_val = min(0.0, min_val), max(0.0, max_val) # Ensures 0 is included on the map.
         if max_val == min_val == 0:
             midpoint = 0.5
@@ -462,8 +489,8 @@ if __name__ == '__main__':
     negative_measured = ['R01082_M', 'R00086_M']
     tight_bounds = False
 
-    show_2var_heatmap = False
-    show_3var_heatmap = True
+    show_2var_heatmap = True
+    show_3var_heatmap = False
     show_3var_fva_heatmap = False
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
