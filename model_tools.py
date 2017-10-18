@@ -292,7 +292,7 @@ def visualize_fba_reactions(model, flux_range, colour_range, to_file_str=None):
             f.write(output)
         print('\nFBA flux values for %s stored at %s' % (model, to_file))
 def kegg_search_color_pathway_fba(data, min_val, max_val, min_col, zero_col, max_col):
-    """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database.
+    """Designed to be visualized using the Search&Color Pathway tool from KEGG, searching against the 'rn' database, using an 'uncolored' diagram.
     data = [('rxn1_id', 42.3), ('rxn2_id', -332.17), ...], min_col = '#00ccee'"""
     val_delta = float(max_val - min_val)
     min_rgb = (int(min_col[1:3], 16), int(min_col[3:5], 16), int(min_col[5:7], 16))
@@ -300,8 +300,17 @@ def kegg_search_color_pathway_fba(data, min_val, max_val, min_col, zero_col, max
     zero_rgb = (int(zero_col[1:3], 16), int(zero_col[3:5], 16), int(zero_col[5:7], 16))
     pos_rgb_delta = [c-zc for c,zc in zip(max_rgb, zero_rgb)]
     neg_rgb_delta = [c-zc for c,zc in zip(min_rgb, zero_rgb)]
-    buff = []
+    buff, used_ids = [], set()
     for r_id, val in data:
+        if r_id + '_M' in data:
+            continue # If there's a cyto and mito version, use the mito.
+        elif r_id.endswith('_M'):
+            r_id = r_id[:-2] # Change the ID so KEGG recognizes it.
+        elif r_id.endswith('_W'):
+            if r_id[:-2] in data or r_id[:-2]+'_M' in data:
+                continue # If there's a cyto or mito version, use one of those.
+            else:
+                r_id = r_id[:-2] # Change the ID so KEGG recognizes it.
         if val == 0.0:
             col = zero_col
         elif val < 0:
@@ -347,6 +356,15 @@ def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max
     neg_rgb_delta = [c-zc for c,zc in zip(min_rgb, zero_rgb)]
     buff = []
     for r_id, min_var, max_var in data:
+        if r_id + '_M' in data:
+            continue # If there's a cyto and mito version, use the mito.
+        elif r_id.endswith('_M'):
+            r_id = r_id[:-2] # Change the ID so KEGG recognizes it.
+        elif r_id.endswith('_W'):
+            if r_id[:-2] in data or r_id[:-2]+'_M' in data:
+                continue # If there's a cyto or mito version, use one of those.
+            else:
+                r_id = r_id[:-2] # Change the ID so KEGG recognizes it.
         val = (min_var + max_var) / 2.0
         if val == 0.0:
             col_rgb = zero_rgb
@@ -491,12 +509,36 @@ def mod_rxns_and_test(rxn_ids, m, fva, orig_obj_f, bounds_deltas, obj_f_threshol
         bio_shadows = []
         for mtb in m.reactions.BIOMASS.metabolites:
             if abs(mtb.y) < 0.25: continue
+            producing_r_id = mtb.id.upper()
+            if producing_r_id not in m.reactions: continue
             sub_shadows = '|'.join('%s %.1f'%(s.id, s.y) for s in m.reactions.get_by_id(mtb.id.upper()).metabolites if abs(s.y) > 0.25 and mtb.id != s.id)
             bio_shadows.append('(%s %.1f: %s)' % (mtb.id, round(mtb.y, 1), sub_shadows))
         obj_diff = (round(new_obj_f-orig_obj_f), rxn_ids, fva_diffs, bio_shadows)
     for r_id, ob in zip(rxn_ids, old_bounds):
         m.reactions.get_by_id(r_id).bounds = ob
     return obj_diff
+
+def setup_import_reaction(model, r_id, mtb, bounds=(0, 1000)):
+    new_rxn = cobra.Reaction('TEST_BIOMASS_IMPORT_REACTION')
+    mtb_dict = {mtb: 1.0}
+    new_rxn.add_metabolites(mtb_dict)
+    new_rxn.bounds = bounds
+    new_rxn.objective_coefficient = 0
+    return new_rxn
+
+def id_bottleneck_metabolites(model, orig_f, rxn_id, threshold=1.0):
+    temp_rxn_id = 'TEST_IMPORT_REACTION'
+    while temp_rxn_id in model.reactions:
+        temp_rxn_id = '_' + temp_rxn_id
+    diffs = []
+    for mtb in model.reactions.get_by_id(rxn_id).metabolites:
+        new_rxn = setup_import_reaction(model, temp_rxn_id, mtb)
+        model.add_reaction(new_rxn)
+        new_f = model.optimize().f
+        model.remove_reactions([new_rxn])
+        if new_f - orig_f > threshold:
+            diffs.append((new_f-orig_f, mtb.id))
+    return diffs
 
 def run():
     # # #  Parameters
@@ -541,24 +583,20 @@ def run():
         cobra.flux_analysis.parsimonious.optimize_minimal_flux(m)
         #m.optimize()
         # rather than m.optimize(); returns optimal FBA with minimum total flux through network.
-
     if topology_analysis:
         for m in models:
             basic_stats(m)
         # # compare_models(m1, m2)
-
     if verbose:
         for m in models:
             print('\n%s summary:' % m)
             m.summary()
-
     if fba_analysis:
         for m, viz_str in zip(models, viz_strs):
             analyze_shadows(m, 5)
             if save_visualizations:
                 visualize_fba_reactions(m, (min_flux, max_flux), colour_range, to_file_str=viz_str)
         # # compare_objective_functions(m1.reactions.get_by_id('BIOMASS'), m2.reactions.get_by_id('BIOMASS'))
-
     fvas = []
     if fva_analysis:
         for m, viz_str in zip(models, viz_strs):
@@ -567,9 +605,7 @@ def run():
             if save_visualizations:
                 visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
         pathway_analysis(models, fvas, pathways_for_analysis)
-
     #assess_metabolites_impact(models[0], models[0].metabolites)
-
     if test_nutrient_combos:
         desc_str = '\nNutrient imports'
         print('%s\n%s' % (desc_str, '-' * len(desc_str.strip())))

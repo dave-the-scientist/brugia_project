@@ -14,10 +14,10 @@ class DiscreteModelResults(object):
     """
     def __init__(self, model, to_modify, to_measure, tight_bounds=False, solver=None):
         self.name = str(model) # Name of the model.
-        self.modified = [] # List of reaction ids that were each modified and tested.
-        self.modified_attrs = {} # Dict of properties used for graphing.
+        self.modified = [] # List of reaction groups, each a list of ids that will be modified and tested.
+        self.modified_attrs = [] # List of dicts, with properties used for graphing.
         self.measured = [] # List of reaction ids for which data are collected.
-        self.measured_attrs = {} # List of human-readable descriptions.
+        self.measured_attrs = {} # Dict of properties used for graphing.
         self.tight_bounds = tight_bounds # If True lb=ub on modified reactions; else lb=0 (ub=0 for reverse reactions).
         self.infeasible = 0.1 # An objective value below this is considered infeasible.
         self.epsilon = 1E-6 # Required to deal with floating point errors.
@@ -52,15 +52,13 @@ class DiscreteModelResults(object):
     def get_total_fluxes(self):
         return self._get_ith_measurement(1)
 
-    def negative_modified(self, modified_rxn):
+    def negative_modified(self, modified_label):
         """Takes either a reaction ID as a string, or a sequence of reaction ID strings. Causes all reaction IDs to be reported as negatives."""
-        if isinstance(modified_rxn, basestring):
-            if modified_rxn in self.modified_attrs:
-                self.modified_attrs[modified_rxn]['coefficient'] = -1.0
+        if isinstance(modified_label, basestring):
+            self._set_modified_attr(modified_label, 'coefficient', -1.0)
         else:
-            for m_rxn in modified_rxn:
-                if m_rxn in self.modified_attrs:
-                    self.modified_attrs[m_rxn]['coefficient'] = -1.0
+            for m_lab in modified_label:
+                self._set_modified_attr(m_lab, 'coefficient', -1.0)
     def negative_measured(self, measured_rxn):
         """Takes either a reaction ID as a string, or a sequence of reaction ID strings. Causes all reaction IDs to be reported as negatives."""
         if isinstance(measured_rxn, basestring):
@@ -70,18 +68,16 @@ class DiscreteModelResults(object):
             for m_rxn in measured_rxn:
                 if m_rxn in self.measured_attrs:
                     self.measured_attrs[m_rxn]['coefficient'] = -1.0
-    def update_modified_attrs(self, modified_rxn, attr_dict):
-        self.modified_attrs[modified_rxn].update(attr_dict)
 
     def save(self, file_path):
         pass
 
     # # # # #  Private methods: running the analysis. # # # # #
     def _run(self):
-        print('\nMeasuring parsimonious flux in %i reactions from %s, while modifying %i reactions:' % (len(self.measured), self.name, len(self.modified)))
+        print('\nMeasuring parsimonious flux in %i reactions from %s, while modifying %i reaction groups:' % (len(self.measured), self.name, len(self.modified)))
         total_conditions = 1
-        for mod, steps in zip(self.modified, self._steps):
-            print('- %s: %i conditions from %.1f to %.1f.' % (mod, len(steps), steps[0], steps[-1]))
+        for mod_attr, steps in zip(self.modified_attrs, self._steps):
+            print('- %s: %i conditions from %.1f to %.1f.' % (mod_attr['label'], len(steps), steps[0], steps[-1]))
             total_conditions *= len(steps)
         print('Analysis requires %i optimizations...' % (total_conditions))
         for rxn_steps, ind in self._run_steps_iter():
@@ -144,6 +140,14 @@ class DiscreteModelResults(object):
         slc = [slice(None)] * len(self.data.shape)
         slc[-1] = ind
         return self.data[slc]
+    def _set_modified_attr(self, _label, _property, _value):
+        for group_prop in self.modified_attrs:
+            if group_prop['label'] == _label:
+                group_prop[_property] = _value
+                break
+        else:
+            print('Error: reaction group "%s" was not found so could not be updated.' % (_label))
+            exit()
 
     # # # # #  Private methods: input and setup. # # # # #
     def _parse_inputs(self, to_modify, to_measure):
@@ -151,17 +155,21 @@ class DiscreteModelResults(object):
         default_modified_attrs = {'coefficient':1.0}
         default_measured_attrs = {'coefficient':1.0}
         if not to_modify or not to_measure:
-            print('At least one reaction must be given to modify, and at least one to measure')
+            print('Error: at least one reaction must be given to modify, and at least one to measure')
             exit()
-        self.modified = [m[0] for m in to_modify] # Retains the same order.
+        self.modified = []
+        self.modified_attrs, self.measured_attrs = [], {}
+        for m in to_modify: # Retains the given order.
+            if isinstance(m[0], basestring): # If it is a rxnID string.
+                self.modified.append( [m[0]] )
+            else: # If it is a list of rxnID strings.
+                self.modified.append( m[0] )
+            self.modified_attrs.append(dict(default_modified_attrs, label=m[1]))
         self.measured = list(sorted(to_measure.keys())) # Sorted by reaction id.
         while self._obj_fxn_id in self.measured:
             self._obj_fxn_id = '_' + self._obj_fxn_id
         while self._total_flux_rxn_id in self.measured:
             self._total_flux_rxn_id = '_' + self._total_flux_rxn_id
-        self.modified_attrs, self.measured_attrs = {}, {}
-        for m in to_modify:
-            self.modified_attrs.setdefault(m[0], {'label':m[1]}).update(default_modified_attrs)
         for m, n in to_measure.items():
             self.measured_attrs.setdefault(m, {'label':n}).update(default_measured_attrs)
         self.measured_attrs.setdefault(self._obj_fxn_id, {'label':self._obj_fxn_label}).update(default_measured_attrs)
@@ -174,31 +182,44 @@ class DiscreteModelResults(object):
             print('The model can only have 1 objective function.')
             exit()
         self.rev_model = model.copy()
+        self.irr_model = model.copy()
+
+        # While I don't know why, the initial bounds of the to_modify reactions can impact the pars flux values of certain reactions (only those that are pixely, and behaving stochasitcally). The loop below should standardize the behaviour between runs.
+        for rxn_group, fluxes in zip(self.modified, self._steps):
+            init_flux = fluxes[0]
+            if self.tight_bounds:
+                bounds = (init_flux-self.epsilon, init_flux+self.epsilon)
+            else:
+                bounds = tuple(sorted([0.0, init_flux]))
+            for r_id in rxn_group:
+                self.rev_model.reactions.get_by_id(r_id).bounds = bounds
+                self.irr_model.reactions.get_by_id(r_id).bounds = bounds
+
         self.rev_lp = self.solver.create_problem(self.rev_model, objective_sense='maximize')
-        self.rev_lp.solve_problem(objective_sense='maximize')
+        self.rev_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
         if self.solver.get_status(self.rev_lp) != 'optimal':
             print('The model could not be initially optimized')
             exit()
-        self.irr_model = model.copy()
         cobra.manipulation.modify.convert_to_irreversible(self.irr_model)
         self.irr_lp = self.solver.create_problem(self.irr_model, objective_sense='minimize')
-        self.irr_lp.solve_problem(objective_sense='maximize')
+        self.irr_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
         if self.solver.get_status(self.irr_lp) != 'optimal':
             print('The irreversible model could not be initially optimized')
             exit()
         irr_m_rxn_ind, rev_m_rxn_ind, obj_ind = {}, {}, None
-        for r_id in self.modified + self.measured:
-            rev_id = r_id + self._rxn_rev_suffix
-            if r_id not in self.irr_model.reactions:
-                print('Could not find reaction "%s" in the model.' % r_id)
-                exit()
-            elif r_id in irr_m_rxn_ind:
-                print('Reaction "%s" was not unique in the model.' % r_id)
-                exit()
-            irr_m_rxn_ind[r_id] = None
-            rev_m_rxn_ind[r_id] = None
-            if rev_id in self.irr_model.reactions:
-                irr_m_rxn_ind[rev_id] = None
+        for rxn_group in self.modified + [self.measured]: # Get LP indices of the reactions to be measured and modified.
+            for r_id in rxn_group:
+                rev_id = r_id + self._rxn_rev_suffix
+                if r_id not in self.irr_model.reactions:
+                    print('Could not find reaction "%s" in the model.' % r_id)
+                    exit()
+                elif r_id in irr_m_rxn_ind:
+                    print('Reaction "%s" was not unique in the model.' % r_id)
+                    exit()
+                irr_m_rxn_ind[r_id] = None
+                rev_m_rxn_ind[r_id] = None
+                if rev_id in self.irr_model.reactions:
+                    irr_m_rxn_ind[rev_id] = None
         for i, rxn in enumerate(self.rev_model.reactions):
             if rxn.id in rev_m_rxn_ind:
                 rev_m_rxn_ind[rxn.id] = i
@@ -233,10 +254,10 @@ class DiscreteModelResults(object):
         return [_min + delta*x for x in range(_steps)]
     def _run_steps_iter(self):
         # Generator that yields (list, index) at each iteration. The list: [(rxn1_id, rxn1_flux), (rxn2_id, rxn2_flux), ...] for each rxn in to_modify. Every reaction should be constrained to these flux values before one optimization and measurement. The index indicates where the measurements should be stored in self.data.
-        modify_conditions = itertools.product(*self._steps)
-        data_inds = itertools.product( *[range(len(s)) for s in self._steps] )
+        modify_conditions = itertools.product(*self._steps) # All combinations of steps.
+        data_inds = itertools.product( *[range(len(s)) for s in self._steps] ) # Where to store the result.
         for r_fs, ind in itertools.izip(modify_conditions, data_inds):
-            labeled_conditions = zip(self.modified, r_fs)
+            labeled_conditions = [(r_id, rxn_flux) for rxn_group, rxn_flux in zip(self.modified, r_fs) for r_id in rxn_group]
             yield labeled_conditions, ind
 
 
@@ -257,8 +278,8 @@ class DmrVisualization(object):
         fig = plt.figure(figsize=figsize)
         fig.canvas.set_window_title(dmr.name)
         first_ax, min_flx, max_flx, cmap = None, None, None, self.colormap
-        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[1]]['coefficient'], dmr._steps[1])
-        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[0]]['coefficient'], dmr._steps[0])
+        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[1]['coefficient'], dmr._steps[1])
+        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[0]['coefficient'], dmr._steps[0])
         for ind, m_rxn in enumerate(measured_rxns):
             flx = dmr.get_fluxes(m_rxn)
             show_x_label, show_x_ticks, show_y_label, show_y_ticks = True, True, True, True
@@ -286,8 +307,8 @@ class DmrVisualization(object):
             print('Error: heatmaps_3var() can only be called with 3 dimensional data.')
             exit()
         measured_rxns = self._expand_measured_reactions(dmr, measured_rxns, include_objective, include_total_flux)
-        dim3_label = dmr.modified_attrs[dmr.modified[2]]['label']
-        dim3_coef = dmr.modified_attrs[dmr.modified[2]]['coefficient']
+        dim3_label = dmr.modified_attrs[2]['label']
+        dim3_coef = dmr.modified_attrs[2]['coefficient']
         dim3_steps = [s*dim3_coef for s in dmr._steps[2]][::-1] # reversed so bottom row is first dim3 step, isntead of top row.
         nrows, ncols = len(dim3_steps), len(measured_rxns)
         num_graphs = nrows * ncols
@@ -305,8 +326,8 @@ class DmrVisualization(object):
         fig = plt.figure(figsize=figsize)
         fig.canvas.set_window_title(dmr.name)
         first_ax, min_flx, max_flx = None, None, None
-        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[1]]['coefficient'], dmr._steps[1])
-        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[dmr.modified[0]]['coefficient'], dmr._steps[0])
+        x_tick_inds, x_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[1]['coefficient'], dmr._steps[1])
+        y_tick_inds, y_tick_vals = self._generate_axis_ticks(dmr.modified_attrs[0]['coefficient'], dmr._steps[0])
         for ind, m_rxn in enumerate(measured_rxns * len(dim3_steps)):
             m_rxn_ind = ind % ncols
             dim3_ind = ind//len(measured_rxns)
@@ -356,8 +377,8 @@ class DmrVisualization(object):
         self._format_graph(dmr, axis, title, show_x_label, show_x_ticks, show_y_label, show_y_ticks)
 
     def _format_graph(self, dmr, axis, title, show_x_label, show_x_ticks, show_y_label, show_y_ticks):
-        x_attrs = dmr.modified_attrs[dmr.modified[1]]
-        y_attrs = dmr.modified_attrs[dmr.modified[0]]
+        x_attrs = dmr.modified_attrs[1]
+        y_attrs = dmr.modified_attrs[0]
         if title != None:
             axis.set_title(title)
         if show_x_label:
@@ -482,37 +503,38 @@ def _expand_steps(_min, _max, _steps):
 
 if __name__ == '__main__':
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_names = ['model_b_mal_3.5.xlsx', 'model_b_mal_4.5-wip.xlsx']
+    model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
+    model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
+    models = [read_excel(m_file, verbose=False) for m_file in model_files]
+    model = models[7]
 
-    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01082_M':'Fumarate -> malate', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
-    negative_modified = []
-    negative_measured = ['R01082_M', 'R00086_M']
+    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01900_M':'Citrate -> Isocitrate', 'R01082_M':'Fumarate -> malate', 'R02570_M':'AKG -> Succinyl-CoA', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
+    negative_modified = [] # Must use the labels here, not the reaction IDs.
+    negative_measured = ['R01082_M', 'R00086_M', 'R01900_M', 'R02570_M'] # Must use reaction IDs.
+    aa_ids = ['NUTRIENTS_%i'%i for i in range(1,21)]
     tight_bounds = False
 
-    show_2var_heatmap = True
-    show_3var_heatmap = False
+    show_2var_heatmap = False
+    show_3var_heatmap = True
     show_3var_fva_heatmap = False
-
-    model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
-    models = [read_excel(m_file, verbose=False) for m_file in model_files][1:]
 
     if show_2var_heatmap:
         to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', 0, 500, 20)]
         to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
-        results = DiscreteModelResults(models[0], to_modify, to_measure, tight_bounds=tight_bounds)
+        results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
         results.negative_modified(negative_modified)
         results.negative_measured(negative_measured)
         vis = DmrVisualization()
         vis.heatmaps_2var(results, to_display, include_objective=True, include_total_flux=True)
     if show_3var_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 25), ('FA_SOURCE', 'Fatty acids', 5, 35, 6)]
+        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 25), ('FA_SOURCE', 'Fatty acids', 45, 70, 6)]
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
-        for model in models:
-            results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
-            results.negative_modified(negative_modified)
-            results.negative_measured(negative_measured)
-            vis = DmrVisualization()
-            vis.heatmaps_3var(results, to_display, include_objective=True, include_total_flux=False)
+
+        results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
+        results.negative_modified(negative_modified)
+        results.negative_measured(negative_measured)
+        vis = DmrVisualization()
+        vis.heatmaps_3var(results, to_display, include_objective=True, include_total_flux=False)
     if show_3var_fva_heatmap:
         to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 10), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 10), ('FA_SOURCE', 'Fatty acids', 10, 35, 4)]
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
