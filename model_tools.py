@@ -531,7 +531,9 @@ def id_bottleneck_metabolites(model, orig_f, rxn_id, threshold=1.0):
     while temp_rxn_id in model.reactions:
         temp_rxn_id = '_' + temp_rxn_id
     diffs = []
-    for mtb in model.reactions.get_by_id(rxn_id).metabolites:
+    for mtb, coef in model.reactions.get_by_id(rxn_id).metabolites.items():
+        if coef > 0:
+            continue
         new_rxn = setup_import_reaction(model, temp_rxn_id, mtb)
         model.add_reaction(new_rxn)
         new_f = model.optimize().f
