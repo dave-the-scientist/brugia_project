@@ -281,7 +281,7 @@ blast_results_file = 'utility/x'
 rxn_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_rxns.pkl'
 gene_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_genes.pkl'
 # # #  Run options
-objective_threshold_fraction = 0.2 # Considered significant if resulting objective function is less than 0.2 (20%) of the original.
+objective_threshold_fraction = 0.3 # Considered significant if resulting objective function is less than 0.3 (30%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
 expression_headings = [('Larval expression (L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression (F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression (M30|M42|M120)', ('M30','M42','M120'))]
@@ -311,7 +311,7 @@ if not os.path.isfile(gene_ko_data_file):
 
     parse_blast_xml(gene_data, blast_xml_file)
 
-    #save_data_object(gene_data, gene_ko_data_file)
+    save_data_object(gene_data, gene_ko_data_file)
 else:
     gene_data = load_data_object(gene_ko_data_file)
 
