@@ -8,6 +8,7 @@ from molecbio import sequ
 from cobra.flux_analysis import single_reaction_deletion, double_reaction_deletion
 from model_tools import id_bottleneck_metabolites
 from read_excel import read_excel
+import xml.etree.ElementTree as ET
 
 
 def get_rxns_to_delete(model):
@@ -33,7 +34,7 @@ def do_deletions(rxn_data, model, rxn_to_genes, do_double_ko=False, obj_fraction
                 deficiencies = find_model_deficiencies(model, orig_f, new_f, r_id)
             else:
                 deficiencies = 'infeasible'
-            rxn_data[r_id] = {'objective':new_f/orig_f*100, 'deficiencies':deficiencies, 'genes':rxn_to_genes[r_id]}
+            rxn_data[r_id] = {'objective':round(new_f/orig_f*100, 1), 'deficiencies':deficiencies, 'genes':rxn_to_genes[r_id]}
     if do_double_ko:
         double_rxn_ids = [r for r in list(rxn_to_genes.keys()) if r not in rxn_data]
         print('Performing double knockouts on %i candidates...' % len(double_rxn_ids))
@@ -84,7 +85,7 @@ def generate_gene_entry(r_data, r_id, gene):
     g_data['num_reactions'] = 1
     return g_data
 
-# # #  Misc functions
+# # #  Save/load functions
 def save_data_object(data_obj, file_path):
     with open(file_path, 'wb') as f:
         cPickle.dump(data_obj, f, protocol=0)
@@ -95,14 +96,37 @@ def load_data_object(file_path):
     print('Loaded data from %s' % file_path)
     return data_obj
 
-def print_deficiencies(rxn_data):
-    r_list = sorted(list(rxn_data.keys()))
-    r_list.sort(key=lambda r:rxn_data[r]['deficiencies'])
-    print('%i reactions with significant impact:' % len(r_list))
-    for r_id in r_list:
-        print('%s %.1f%% of objective value.' % (r_id, rxn_data[r_id]['objective']))
-        print('\t%s' % rxn_data[r_id]['deficiencies'])
-        print('\t%s' % ', '.join(rxn_data[r_id]['genes']))
+def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
+    min_column_width = 10
+    sheet_name = 'Single knockouts'
+    gene_header = 'Gene ID'
+    headers_atts = [('# Reactions','num_reactions'), ('Reaction','reaction'), ('Associated genes','other_genes'), ('Objective %','objective'), ('Biomass deficiencies','deficiencies')]
+    ortho_headers = ['Human homologs', 'Homolog quality (% identity|% coverage)']
+    data = {h[0]:[] for h in headers_atts+expression_headings}
+    for h in [gene_header] + ortho_headers:
+        data[h] = []
+    gene_order = sorted(list(gene_data.keys()))
+    gene_order.sort(key=lambda g:gene_data[g][0]['deficiencies'])
+    for gene in gene_order:
+        for g_data in gene_data[gene]:
+            data[gene_header].append(gene)
+            for h, att in headers_atts:
+                data[h].append(g_data.get(att, 'NOT FOUND'))
+            data[ortho_headers[0]].append(g_data['num_human_prots'])
+            data[ortho_headers[1]].append( '%.1f|%.1f' % (g_data['human_prot_identity'],g_data['human_prot_coverage']) )
+            for h, ls in expression_headings:
+                exp_levels = [g_data['expression_levels'].get(l) for l in ls]
+                data[h].append('|'.join(exp_levels))
+    col_headers = [gene_header] + [h[0] for h in headers_atts] + [i for i in ortho_headers] + [j[0] for j in expression_headings]
+    writer = pandas.ExcelWriter(gene_data_out_file, engine='xlsxwriter')
+    df = pandas.DataFrame(data)[col_headers] # The [] specifies the order of the columns.
+    df.to_excel(writer, sheet_name=sheet_name, index=False)
+    worksheet = writer.sheets[sheet_name]
+    for i, h in enumerate(col_headers):
+        col_width = max(len(h)+1, min_column_width)
+        worksheet.set_column(i, i, col_width)
+    writer.save()
+    print('Data saved to %s' % gene_data_out_file)
 
 # # #  Getting protein names and sequences
 def save_prot_names_list(gene_data):
@@ -152,11 +176,63 @@ def save_prot_sequences(gene_data, prot_to_std, prot_sequences_file):
     print('Saved %i sequences to %s' % (len(prots), prot_sequences_file))
     return prots
 
+# # #  Parsing BLAST output
+def parse_blast_xml(gene_data, blast_xml_file):
+    min_e_val = 1E-30
+    tree = ET.parse(blast_xml_file)
+    root = tree.getroot()
+    iterations = root.find('BlastOutput_iterations')
+    for q_hit in iterations:
+        gene = q_hit.find('Iteration_query-def').text
+        prot_len = float(q_hit.find('Iteration_query-len').text)
+        s_hits = q_hit.find('Iteration_hits')
+        num_hits, top_hit_id, top_e_val, top_identity, top_coverage = get_good_hits(s_hits, min_e_val)
+        top_coverage = round(top_coverage/prot_len*100.0, 1)
+        for g_data in gene_data[gene]:
+            g_data['num_human_prots'] = num_hits
+            g_data['human_prot_id'] = top_hit_id
+            g_data['human_prot_identity'] = top_identity
+            g_data['human_prot_coverage'] = top_coverage
+
+
+def get_good_hits(s_hits, min_e_val):
+    """Counts based on the 'Hit_def' field in the subject hits, which is the name. Attempts to remove isoforms and predicted proteins from the count.
+    """
+    best_hit_id, best_e_val, best_ident, best_coverage = None, min_e_val + 1, 0, 0
+    hit_names = set()
+    for s_hit in s_hits:
+        hit_e_val, hit_ident, hit_coverage = min_e_val + 1, 0, 0
+        for hsp in s_hit.find('Hit_hsps'):
+            e_val = float(hsp.find('Hsp_evalue').text)
+            if e_val < hit_e_val:
+                hit_e_val = e_val
+                hit_ident = round(float(hsp.find('Hsp_identity').text)/float(hsp.find('Hsp_align-len').text)*100, 1)
+                hit_coverage = int(hsp.find('Hsp_query-to').text) - int(hsp.find('Hsp_query-from').text)
+        if hit_e_val < min_e_val:
+            for nm in s_hit.find('Hit_def').text.lower().split(' >gi'):
+                if nm.strip().endswith(' [homo sapiens]'):
+                    name = nm.strip()[:-15]
+                    break
+            else:
+                print('Warning: no human protein name found in hit "%s", skipping it.' % s_hit.find('Hit_def').text)
+                continue # Something weird going on, probably don't want to count it.
+            if name.startswith('predicted: '):
+                name = name[11:]
+            name = name.partition(' isoform ')[0]
+            hit_names.add(name)
+            if hit_e_val < best_e_val:
+                best_hit_id = s_hit.find('Hit_accession').text.strip()
+                best_ident = hit_ident
+                best_e_val, best_coverage = hit_e_val, hit_coverage
+    if not hit_names:
+        return 0, None, None, 0, 0
+    return len(hit_names), best_hit_id, best_e_val, best_ident, best_coverage
+
 # # #  Getting expression data
 def get_expression_data(gene_data, expression_file, sheetnames, conditions):
     for sheetname in sheetnames:
         parse_expression_sheet(gene_data, expression_file, sheetname, conditions)
-    null_exp = {c:'-' for c in conditions}
+    null_exp = {c:' -- ' for c in conditions}
     for gene, entries in gene_data.items():
         for e in entries:
             if 'expression_levels' not in e:
@@ -176,27 +252,39 @@ def parse_expression_sheet(gene_data, filename, sheetname, conditions):
         if seq_name not in gene_data:
             continue
         avgs = [sum(row[k] for k in ck)/float(len(ck)) for ck in cond_keys]
-        exp = {c:a/max(avgs)*100.0 for a,c in zip(avgs, conditions)}
+        exp = {c:'%.1f'%(a/max(avgs)*100.0) for a,c in zip(avgs, conditions)}
         for entry in gene_data[seq_name]:
             entry['expression_levels'] = exp
 
+# # #  Misc functions
+def print_deficiencies(rxn_data):
+    r_list = sorted(list(rxn_data.keys()))
+    r_list.sort(key=lambda r:rxn_data[r]['deficiencies'])
+    print('%i reactions with significant impact:' % len(r_list))
+    for r_id in r_list:
+        print('%s %.1f%% of objective value.' % (r_id, rxn_data[r_id]['objective']))
+        print('\t%s' % rxn_data[r_id]['deficiencies'])
+        print('\t%s' % ', '.join(rxn_data[r_id]['genes']))
 
 
-
-# # #  Input options
+# # #  I/O options
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
 model_file = 'model_b_mal_4.5-wip.xlsx'
 expression_file = 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx'
 expression_sheets = ('Brugia_FPKMs', 'Wolbachia_FPKMs')
-prot_sequences_file = 'utility/model_b_mal_4.5-wip_single_ko_prots.fa'
 gen_pept_file = 'utility/b_malayi_genpept.gp'
+blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_human_blast.xml'
+gene_data_out_file = os.path.join(files_dir, 'bm_4.5_single_ko_gene_info.xlsx')
+# # #  Intermediate files
+prot_sequences_file = 'utility/model_b_mal_4.5-wip_single_ko_prots.fa'
+blast_results_file = 'utility/x'
 rxn_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_rxns.pkl'
 gene_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_genes.pkl'
 # # #  Run options
-objective_threshold_fraction = 0.1 # Considered significant if resulting objective function is less than 0.1 (10%) of the original.
+objective_threshold_fraction = 0.2 # Considered significant if resulting objective function is less than 0.2 (20%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
-expression_headings = [('Larval expression (L3|L3D6|L3D9|L4)', 'L3','L3D6','L3D9','L4'), ('Adult female expression (F30|F42|F120)', 'F30','F42','F120'), ('Adult male expression (M30|M42|M120)', 'M30','M42','M120')]
+expression_headings = [('Larval expression (L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression (F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression (M30|M42|M120)', ('M30','M42','M120'))]
 
 
 # # #  Run steps
@@ -221,10 +309,10 @@ if not os.path.isfile(gene_ko_data_file):
     else:
         prots = sequ.loadfasta(prot_sequences_file)
 
-    # Do BLAST/similarity searches
+    parse_blast_xml(gene_data, blast_xml_file)
 
     #save_data_object(gene_data, gene_ko_data_file)
 else:
     gene_data = load_data_object(gene_ko_data_file)
 
-# save to excel file.
+save_data_to_excel(gene_data, gene_data_out_file, expression_headings)
