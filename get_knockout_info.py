@@ -2,8 +2,12 @@
 Notes:
 - Brugia protein sequences: https://www.ncbi.nlm.nih.gov/bioproject/PRJNA10729
 - wBm protein sequences: https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=292805
+- BLASTP against Reference proteins (refseq protein) from Human, using BLOSUM45 matrix.
+- BLASTP against nr proteins from O. volvulus and wOv, using BLOSUM45 matrix.
+  - Caution about the Oncho results; I'm not sure how many protein sequences have been annotated.
+- The ChEMBL search results were performed under the "Target Search" tab on their website. Downloaded as a tab-deliminited file.
 """
-import os, cPickle, pandas
+import os, cPickle, pandas, re
 from molecbio import sequ
 from cobra.flux_analysis import single_reaction_deletion, double_reaction_deletion
 from model_tools import id_bottleneck_metabolites
@@ -98,10 +102,11 @@ def load_data_object(file_path):
 
 def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
     min_column_width = 10
+    header_bg = '#DEEDED'
     sheet_name = 'Single knockouts'
     gene_header = 'Gene ID'
     headers_atts = [('# Reactions','num_reactions'), ('Reaction','reaction'), ('Associated genes','other_genes'), ('Objective %','objective'), ('Biomass deficiencies','deficiencies')]
-    ortho_headers = ['Human homologs', 'Homolog quality (% identity|% coverage)']
+    ortho_headers = ['Human homologs\n(#|% identity|% coverage)', 'O. volvulus homologs\n(#|% identity|% coverage)']
     data = {h[0]:[] for h in headers_atts+expression_headings}
     for h in [gene_header] + ortho_headers:
         data[h] = []
@@ -112,19 +117,29 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
             data[gene_header].append(gene)
             for h, att in headers_atts:
                 data[h].append(g_data.get(att, 'NOT FOUND'))
-            data[ortho_headers[0]].append(g_data['num_human_prots'])
-            data[ortho_headers[1]].append( '%.1f|%.1f' % (g_data['human_prot_identity'],g_data['human_prot_coverage']) )
+            human_hlogs = '%i | %.1f | %.1f' % (g_data['num_human_prots'], g_data['human_prot_identity'],g_data['human_prot_coverage']) if g_data['num_human_prots'] else 'None'
+            data[ortho_headers[0]].append(human_hlogs)
+            oncho_hlogs = '%i | %.1f | %.1f' % (g_data['num_oncho_prots'], g_data['oncho_prot_identity'],g_data['oncho_prot_coverage']) if g_data['num_oncho_prots'] else 'None'
+            data[ortho_headers[1]].append(oncho_hlogs)
             for h, ls in expression_headings:
                 exp_levels = [g_data['expression_levels'].get(l) for l in ls]
-                data[h].append('|'.join(exp_levels))
+                data[h].append(' | '.join(exp_levels))
     col_headers = [gene_header] + [h[0] for h in headers_atts] + [i for i in ortho_headers] + [j[0] for j in expression_headings]
     writer = pandas.ExcelWriter(gene_data_out_file, engine='xlsxwriter')
     df = pandas.DataFrame(data)[col_headers] # The [] specifies the order of the columns.
-    df.to_excel(writer, sheet_name=sheet_name, index=False)
+    df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=1, header=False)
     worksheet = writer.sheets[sheet_name]
+    header_format = writer.book.add_format({'bold': True, 'text_wrap': True, 'align': 'center', 'valign': 'top', 'bg_color': header_bg, 'border': 1})
     for i, h in enumerate(col_headers):
-        col_width = max(len(h)+1, min_column_width)
-        worksheet.set_column(i, i, col_width)
+        col_w = max(len(line.strip()) for line in h.splitlines())
+        col_width = max(col_w+1, min_column_width)
+        if i in (0, 2, 3, 5):
+            col_format = writer.book.add_format({'align': 'left'})
+        else:
+            col_format = writer.book.add_format({'align': 'center'})
+        worksheet.set_column(i, i, col_width, col_format)
+        worksheet.write(0, i, h, header_format) # Header added manually.
+    worksheet.freeze_panes(1, 0) # Freezes header row.
     writer.save()
     print('Data saved to %s' % gene_data_out_file)
 
@@ -172,13 +187,18 @@ def save_prot_sequences(gene_data, prot_to_std, prot_sequences_file):
         for g in set(gene_data) - found_genes:
             print(g)
         exit()
-    sequ.savefasta(prots, prot_sequences_file)
+    sequ.savefasta(prots, prot_sequences_file, spaces=False, numbers=False)
     print('Saved %i sequences to %s' % (len(prots), prot_sequences_file))
     return prots
 
 # # #  Parsing BLAST output
-def parse_blast_xml(gene_data, blast_xml_file):
+def parse_blast_xml(gene_data, blast_xml_file, taxon_name, spc_str):
+    """taxon_name is used to name the properties saved in gene_data."""
     min_e_val = 1E-30
+    property_strs = ['num_%s_prots', '%s_prot_id', '%s_prot_identity', '%s_prot_coverage']
+    gi_split_regex = re.compile('\s?>gi\|\S+\|\S+\|\S+\|\s?')
+    gene_spc_regex = re.compile('(.+) \[(.+)\]$')
+    isoform_regex = re.compile('(.+) (isoform \S+)(.*)$')
     tree = ET.parse(blast_xml_file)
     root = tree.getroot()
     iterations = root.find('BlastOutput_iterations')
@@ -186,16 +206,15 @@ def parse_blast_xml(gene_data, blast_xml_file):
         gene = q_hit.find('Iteration_query-def').text
         prot_len = float(q_hit.find('Iteration_query-len').text)
         s_hits = q_hit.find('Iteration_hits')
-        num_hits, top_hit_id, top_e_val, top_identity, top_coverage = get_good_hits(s_hits, min_e_val)
+        hit_names, top_hit_id, top_e_val, top_identity, top_coverage = get_good_hits(s_hits, min_e_val, spc_str.lower(), gi_split_regex, gene_spc_regex, isoform_regex)
+        num_hits = len(hit_names)
         top_coverage = round(top_coverage/prot_len*100.0, 1)
         for g_data in gene_data[gene]:
-            g_data['num_human_prots'] = num_hits
-            g_data['human_prot_id'] = top_hit_id
-            g_data['human_prot_identity'] = top_identity
-            g_data['human_prot_coverage'] = top_coverage
+            for p_str, val in zip(property_strs, [num_hits, top_hit_id, top_identity, top_coverage]):
+                g_data[p_str % taxon_name] = val
 
 
-def get_good_hits(s_hits, min_e_val):
+def get_good_hits(s_hits, min_e_val, spc_str, gi_split_regex, gene_spc_regex, isoform_regex):
     """Counts based on the 'Hit_def' field in the subject hits, which is the name. Attempts to remove isoforms and predicted proteins from the count.
     """
     best_hit_id, best_e_val, best_ident, best_coverage = None, min_e_val + 1, 0, 0
@@ -209,30 +228,43 @@ def get_good_hits(s_hits, min_e_val):
                 hit_ident = round(float(hsp.find('Hsp_identity').text)/float(hsp.find('Hsp_align-len').text)*100, 1)
                 hit_coverage = int(hsp.find('Hsp_query-to').text) - int(hsp.find('Hsp_query-from').text)
         if hit_e_val < min_e_val:
-            for nm in s_hit.find('Hit_def').text.lower().split(' >gi'):
-                if nm.strip().endswith(' [homo sapiens]'):
-                    name = nm.strip()[:-15]
-                    break
-            else:
-                print('Warning: no human protein name found in hit "%s", skipping it.' % s_hit.find('Hit_def').text)
-                continue # Something weird going on, probably don't want to count it.
-            if name.startswith('predicted: '):
-                name = name[11:]
-            name = name.partition(' isoform ')[0]
+            name = parse_name_from_hit(s_hit, spc_str, gi_split_regex, gene_spc_regex, isoform_regex)
+            if not name:
+                continue # A hit was found, but it did not match the spc_str
             hit_names.add(name)
             if hit_e_val < best_e_val:
                 best_hit_id = s_hit.find('Hit_accession').text.strip()
                 best_ident = hit_ident
                 best_e_val, best_coverage = hit_e_val, hit_coverage
     if not hit_names:
-        return 0, None, None, 0, 0
-    return len(hit_names), best_hit_id, best_e_val, best_ident, best_coverage
+        return hit_names, None, None, 0, 0
+    return hit_names, best_hit_id, best_e_val, best_ident, best_coverage
+def parse_name_from_hit(s_hit, spc_str, gi_split_regex, gene_spc_regex, isoform_regex):
+    name = find_gene_from_species(s_hit, spc_str, gi_split_regex, gene_spc_regex)
+    if not name:
+        return False
+    if 'isoform' in name:
+        nm, iso, rem = isoform_regex.match(name).groups()
+        name = nm + rem
+    if name.lower().startswith('predicted: '):
+        name = name[11:]
+    return name
+
+def find_gene_from_species(s_hit, spc_str, gi_split_regex, gene_spc_regex):
+    for hit in gi_split_regex.split( s_hit.find('Hit_def').text ):
+        m = gene_spc_regex.match(hit)
+        if not m:
+            continue
+        name, spc = m.groups()
+        if spc_str in spc.lower():
+            return name
+    return False
 
 # # #  Getting expression data
 def get_expression_data(gene_data, expression_file, sheetnames, conditions):
     for sheetname in sheetnames:
         parse_expression_sheet(gene_data, expression_file, sheetname, conditions)
-    null_exp = {c:' -- ' for c in conditions}
+    null_exp = {c:'--' for c in conditions}
     for gene, entries in gene_data.items():
         for e in entries:
             if 'expression_levels' not in e:
@@ -252,9 +284,13 @@ def parse_expression_sheet(gene_data, filename, sheetname, conditions):
         if seq_name not in gene_data:
             continue
         avgs = [sum(row[k] for k in ck)/float(len(ck)) for ck in cond_keys]
-        exp = {c:'%.1f'%(a/max(avgs)*100.0) for a,c in zip(avgs, conditions)}
+        exp = {c:'%i'%(round(a/max(avgs)*100.0, 0)) for a,c in zip(avgs, conditions)}
         for entry in gene_data[seq_name]:
             entry['expression_levels'] = exp
+
+# # #  Parse ChEMBL search file
+def parse_chembl_results(gene_data, chembl_results_file):
+    pass
 
 # # #  Misc functions
 def print_deficiencies(rxn_data):
@@ -273,7 +309,9 @@ model_file = 'model_b_mal_4.5-wip.xlsx'
 expression_file = 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx'
 expression_sheets = ('Brugia_FPKMs', 'Wolbachia_FPKMs')
 gen_pept_file = 'utility/b_malayi_genpept.gp'
-blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_human_blast.xml'
+human_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_human_blast.xml'
+oncho_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_oncho_blast.xml'
+chembl_results_file = 'utility/model_b_mal_4.5-wip_single_kos_chembl.txt
 gene_data_out_file = os.path.join(files_dir, 'bm_4.5_single_ko_gene_info.xlsx')
 # # #  Intermediate files
 prot_sequences_file = 'utility/model_b_mal_4.5-wip_single_ko_prots.fa'
@@ -284,7 +322,7 @@ gene_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_genes.pkl'
 objective_threshold_fraction = 0.3 # Considered significant if resulting objective function is less than 0.3 (30%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
-expression_headings = [('Larval expression (L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression (F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression (M30|M42|M120)', ('M30','M42','M120'))]
+expression_headings = [('Larval expression\n(L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression\n(F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression\n(M30|M42|M120)', ('M30','M42','M120'))]
 
 
 # # #  Run steps
@@ -308,11 +346,20 @@ if not os.path.isfile(gene_ko_data_file):
         prots = save_prot_sequences(gene_data, prot_to_std, prot_sequences_file)
     else:
         prots = sequ.loadfasta(prot_sequences_file)
-
-    parse_blast_xml(gene_data, blast_xml_file)
-
+    for blast_file in [human_blast_xml_file, oncho_blast_xml_file]:
+        if not os.path.isfile(blast_file):
+            print('Error: no BLAST results found at %s' % blast_file)
+            exit()
+    parse_blast_xml(gene_data, human_blast_xml_file, 'human', 'homo sapiens')
+    parse_blast_xml(gene_data, oncho_blast_xml_file, 'oncho', 'onchocerca volvulus')
+    if not os.path.isfile(chembl_results_file):
+        print('Error: no ChEMBL results found at %s' % chembl_results_file)
+        exit()
+    # parse_chembl_results(gene_data, chembl_results_file) # Where it should be called.
     save_data_object(gene_data, gene_ko_data_file)
 else:
     gene_data = load_data_object(gene_ko_data_file)
+
+parse_chembl_results(gene_data, chembl_results_file) # # # Temp place to be called from.
 
 save_data_to_excel(gene_data, gene_data_out_file, expression_headings)

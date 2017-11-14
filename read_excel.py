@@ -372,4 +372,5 @@ def generate_dataframe(sheet_name, headers, data, writer):
     for i, h in enumerate(col_headers):
         col_width = max(len(h)+1, min_column_width)
         worksheet.set_column(i, i, col_width)
+    worksheet.freeze_panes(1, 0) # Freezes top row.
     return df
