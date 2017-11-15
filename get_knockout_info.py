@@ -107,8 +107,9 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
     gene_header = 'Gene ID'
     headers_atts = [('# Reactions','num_reactions'), ('Reaction','reaction'), ('Associated genes','other_genes'), ('Objective %','objective'), ('Biomass deficiencies','deficiencies')]
     ortho_headers = ['Human homologs\n(#|% identity|% coverage)', 'O. volvulus homologs\n(#|% identity|% coverage)']
+    chembl_headers = ['# ChEMBL hits', 'ChEMBL hits\n(% identity|species)']
     data = {h[0]:[] for h in headers_atts+expression_headings}
-    for h in [gene_header] + ortho_headers:
+    for h in [gene_header] + ortho_headers + chembl_headers:
         data[h] = []
     gene_order = sorted(list(gene_data.keys()))
     gene_order.sort(key=lambda g:gene_data[g][0]['deficiencies'])
@@ -121,10 +122,12 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
             data[ortho_headers[0]].append(human_hlogs)
             oncho_hlogs = '%i | %.1f | %.1f' % (g_data['num_oncho_prots'], g_data['oncho_prot_identity'],g_data['oncho_prot_coverage']) if g_data['num_oncho_prots'] else 'None'
             data[ortho_headers[1]].append(oncho_hlogs)
+            data[chembl_headers[0]].append(g_data.get('num_chembl_hits', 0))
+            data[chembl_headers[1]].append(g_data.get('chembl_hits', ''))
             for h, ls in expression_headings:
                 exp_levels = [g_data['expression_levels'].get(l) for l in ls]
                 data[h].append(' | '.join(exp_levels))
-    col_headers = [gene_header] + [h[0] for h in headers_atts] + [i for i in ortho_headers] + [j[0] for j in expression_headings]
+    col_headers = [gene_header] + [h[0] for h in headers_atts] + [i for i in ortho_headers+chembl_headers] + [j[0] for j in expression_headings]
     writer = pandas.ExcelWriter(gene_data_out_file, engine='xlsxwriter')
     df = pandas.DataFrame(data)[col_headers] # The [] specifies the order of the columns.
     df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=1, header=False)
@@ -133,7 +136,7 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
     for i, h in enumerate(col_headers):
         col_w = max(len(line.strip()) for line in h.splitlines())
         col_width = max(col_w+1, min_column_width)
-        if i in (0, 2, 3, 5):
+        if i in (0, 2, 3, 5, 9):
             col_format = writer.book.add_format({'align': 'left'})
         else:
             col_format = writer.book.add_format({'align': 'center'})
@@ -290,7 +293,30 @@ def parse_expression_sheet(gene_data, filename, sheetname, conditions):
 
 # # #  Parse ChEMBL search file
 def parse_chembl_results(gene_data, chembl_results_file):
-    pass
+    max_e_val = 1E-30
+    chembl_data = {}
+    total_hits, sig_hits = 0, 0
+    with open(chembl_results_file) as f:
+        f.readline() # Header
+        for line in f:
+            if not line.strip():
+                continue
+            total_hits += 1
+            gene, chembl_id, tid, description, uniprot_id, target_type, species, _, _, identity, blast_score, e_value = line.split('\t')
+            identity, e_value = float(identity), float(e_value)
+            if e_value > max_e_val:
+                continue
+            sig_hits += 1
+            hit_data = {'chembl_id':chembl_id, 'species':species, 'identity':identity, 'e_value':e_value}
+            chembl_data.setdefault(gene, []).append(hit_data)
+    print('%i of the %i ChEMBL hits were below the E-value threshold of %.1e' % (sig_hits, total_hits, max_e_val))
+    for gene, data_list in chembl_data.items():
+        data_list.sort(key=lambda d: d['e_value'])
+        chembl_hits = ', '.join('%s (%i | %s)' % (d['chembl_id'], round(d['identity'], 0), d['species']) for d in data_list)
+        for g_data in gene_data[gene]:
+            g_data['num_chembl_hits'] = len(data_list)
+            g_data['chembl_hits'] = chembl_hits
+
 
 # # #  Misc functions
 def print_deficiencies(rxn_data):
@@ -311,7 +337,7 @@ expression_sheets = ('Brugia_FPKMs', 'Wolbachia_FPKMs')
 gen_pept_file = 'utility/b_malayi_genpept.gp'
 human_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_human_blast.xml'
 oncho_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_oncho_blast.xml'
-chembl_results_file = 'utility/model_b_mal_4.5-wip_single_kos_chembl.txt
+chembl_results_file = 'utility/model_b_mal_4.5-wip_single_kos_chembl.txt'
 gene_data_out_file = os.path.join(files_dir, 'bm_4.5_single_ko_gene_info.xlsx')
 # # #  Intermediate files
 prot_sequences_file = 'utility/model_b_mal_4.5-wip_single_ko_prots.fa'
