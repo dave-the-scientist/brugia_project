@@ -425,6 +425,27 @@ def pathway_analysis(models, fvas, pathways):
         buff.append('\t%s:\n%s\n' % (path_desc, pathway_values))
     print('\n'.join(buff).rstrip())
 
+def wol_transport_analysis(models, fvas):
+    print('\n\tWolbachia transport reactions for %s:' % (models[0]))
+    buff = []
+    name_len, val_len = 0, 0
+    for rxn in models[0].reactions:
+        if rxn.id.startswith('DIFFUSION') and rxn.id.endswith('_W') or \
+        rxn.id.startswith('W_TRANS_') or \
+        rxn.id.startswith('CARBON_SOURCE') and rxn.id.endswith('_W'):
+            bounds = sorted((round(fvas[0][rxn.id]['minimum'], 0), round(fvas[0][rxn.id]['maximum'], 0)))
+            if bounds == (0, 0):
+                val = 'N/A'
+            else:
+                val = '%i/%i %.1f' % (bounds[0], bounds[1], rxn.x)
+            name = '%s (%s):' % (rxn.name, rxn.id)
+            if len(name) > name_len: name_len = len(name)
+            if len(val) > val_len: val_len = len(val)
+            buff.append((name, val))
+    val_str = '%%-%is %%%is' % (name_len, val_len)
+    vals = sorted([val_str%(name,val) for name, val in buff])
+    print('\n'.join(vals))
+
 def compare_reaction_mtbs(model1, model2, missing_mtb, outfile):
     rxn_mtbs = set()
     exchanges, transports = set(), set()
@@ -553,7 +574,7 @@ def run():
 
     # # #  Run-time options
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_files = ['model_b_mal_4.5-wip.xlsx', 'model_o_vol_4.5-wip.xlsx']
+    model_files = ['model_b_mal_4.5-wip.xlsx']
     mtb_cmp_str = '%s_wip.xlsx'
     verbose = True
     topology_analysis = False
@@ -562,6 +583,7 @@ def run():
     save_visualizations = False
     do_reaction_mtb_comparison = None # 'C00080', or None
     test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.
+    show_wol_transports = True
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
     models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
@@ -607,6 +629,9 @@ def run():
             if save_visualizations:
                 visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
         pathway_analysis(models, fvas, pathways_for_analysis)
+        if show_wol_transports:
+            wol_transport_analysis(models, fvas)
+
     #assess_metabolites_impact(models[0], models[0].metabolites)
     if test_nutrient_combos:
         desc_str = '\nNutrient imports'

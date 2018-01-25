@@ -118,13 +118,18 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
             data[gene_header].append(gene)
             for h, att in headers_atts:
                 data[h].append(g_data.get(att, 'NOT FOUND'))
-            human_hlogs = '%i | %.1f | %.1f' % (g_data['num_human_prots'], g_data['human_prot_identity'],g_data['human_prot_coverage']) if g_data['num_human_prots'] else 'None'
+            human_hlogs = '%i | %.1f | %.1f' % (g_data['num_human_prots'], g_data['human_prot_identity'],g_data['human_prot_coverage']) if g_data['num_human_prots'] else ' '
             data[ortho_headers[0]].append(human_hlogs)
-            oncho_hlogs = '%i | %.1f | %.1f' % (g_data['num_oncho_prots'], g_data['oncho_prot_identity'],g_data['oncho_prot_coverage']) if g_data['num_oncho_prots'] else 'None'
+            oncho_hlogs = '%i | %.1f | %.1f' % (g_data['num_oncho_prots'], g_data['oncho_prot_identity'],g_data['oncho_prot_coverage']) if g_data['num_oncho_prots'] else ' '
             data[ortho_headers[1]].append(oncho_hlogs)
             data[chembl_headers[0]].append(g_data.get('num_chembl_hits', 0))
             data[chembl_headers[1]].append(g_data.get('chembl_hits', ''))
-            for h, ls in expression_headings:
+            if '_max_observed_expression' in g_data['expression_levels']:
+                max_expression = round(g_data['expression_levels']['_max_observed_expression'], 1)
+            else:
+                max_expression = " "
+            data[expression_headings[0][0]].append(max_expression)
+            for h, ls in expression_headings[1:]:
                 exp_levels = [g_data['expression_levels'].get(l) for l in ls]
                 data[h].append(' | '.join(exp_levels))
     col_headers = [gene_header] + [h[0] for h in headers_atts] + [i for i in ortho_headers+chembl_headers] + [j[0] for j in expression_headings]
@@ -138,6 +143,8 @@ def save_data_to_excel(gene_data, gene_data_out_file, expression_headings):
         col_width = max(col_w+1, min_column_width)
         if i in (0, 2, 3, 5, 9):
             col_format = writer.book.add_format({'align': 'left'})
+        elif i == 10:
+            col_format = writer.book.add_format({'align': 'center'})
         else:
             col_format = writer.book.add_format({'align': 'center'})
         worksheet.set_column(i, i, col_width, col_format)
@@ -287,7 +294,9 @@ def parse_expression_sheet(gene_data, filename, sheetname, conditions):
         if seq_name not in gene_data:
             continue
         avgs = [sum(row[k] for k in ck)/float(len(ck)) for ck in cond_keys]
-        exp = {c:'%i'%(round(a/max(avgs)*100.0, 0)) for a,c in zip(avgs, conditions)}
+        max_expression = max(avgs)
+        exp = {c:'%i'%(round(a/max_expression*100.0, 0)) for a,c in zip(avgs, conditions)}
+        exp['_max_observed_expression'] = max_expression
         for entry in gene_data[seq_name]:
             entry['expression_levels'] = exp
 
@@ -348,7 +357,7 @@ gene_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_genes.pkl'
 objective_threshold_fraction = 0.3 # Considered significant if resulting objective function is less than 0.3 (30%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
-expression_headings = [('Larval expression\n(L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression\n(F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression\n(M30|M42|M120)', ('M30','M42','M120'))]
+expression_headings = [('Max\nexpression',), ('Larval expression\n(L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression\n(F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression\n(M30|M42|M120)', ('M30','M42','M120'))]
 
 
 # # #  Run steps
