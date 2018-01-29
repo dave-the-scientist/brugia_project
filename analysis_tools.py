@@ -10,9 +10,10 @@ import matplotlib.pyplot as plt
 class DiscreteModelResults(object):
     """Holds results of testing the model by varying the reaction bounds of a number of reactions.
 
+    to_modify: A list of tuples.
     self.data: numpy.Matrix. The main data structure is an (n+1)-dimensional matrix, where n is the number of modified reactions. Each position in the matrix holds a 1-dimensional array, whose 0-th entry is the objective function flux at that condition, the 1-th entry is the total flux in the entire system at that condition, and the following values are the flux through each reaction in self.measured, sorted by the name of the reaction ID.
     """
-    def __init__(self, model, to_modify, to_measure, tight_bounds=False, solver=None):
+    def __init__(self, model, to_modify, to_measure, tight_bounds=False, mtb_update=None, solver=None):
         self.name = str(model) # Name of the model.
         self.modified = [] # List of reaction groups, each a list of ids that will be modified and tested.
         self.modified_attrs = [] # List of dicts, with properties used for graphing.
@@ -31,8 +32,8 @@ class DiscreteModelResults(object):
         else:
             self.solver = cobra.solvers.cglpk
         self._parse_inputs(to_modify, to_measure)
-        self._setup_models(model) # Sets up self.irr_lp, self.irr_model, and self.rev_model
-        self.data = np.zeros([m[4] for m in to_modify] + [len(to_measure)+2])
+        self._setup_models(model, mtb_update) # Sets up self.irr_lp, self.irr_model, and self.rev_model
+        self.data = np.zeros([m[2][2] for m in to_modify] + [len(to_measure)+2])
         self._run()
 
     # # # # #  Public methods. # # # # #
@@ -88,6 +89,12 @@ class DiscreteModelResults(object):
         obj_f, total_f = 0.0, 0.0
         self.rev_lp.solve_problem(objective_sense='maximize')
         self.rev_model.solution = self.solver.format_solution(self.rev_lp, self.rev_model)
+        if self.rev_model.solution.status == 'infeasible':
+            # Sometimes the solution will return infeasible for no apparent reason: it would using [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (40, 80, 6))], but not for ('FA_SOURCE', 'Fatty acids', (40, 80, 5)). This is a slower way to solve, but doesn't return infeasible for those same parameters.
+            for rxn_id, rxn_f in rxn_steps:
+                rxn_lb, rxn_ub, _, _, _, _ = self._calc_new_rxn_bounds(rxn_id, rxn_f)
+                self.rev_model.reactions.get_by_id(rxn_id).bounds = (rxn_lb, rxn_ub)
+            cobra.flux_analysis.optimize_minimal_flux(self.rev_model).status
         if self.rev_model.solution.status == "optimal" and self.rev_model.solution.f > self.infeasible:
             obj_f = self.rev_model.solution.f
             self.irr_lp.change_variable_bounds(self._obj_ind, obj_f-self.epsilon, self._obj_ub)
@@ -102,10 +109,14 @@ class DiscreteModelResults(object):
         self._measure_reactions(data_ind, obj_f, total_f)
 
     # # # # #  Private methods: getting and setting values. # # # # #
-    def _set_reaction_bounds(self, rxn_steps):
-        if not self.tight_bounds:
-            fwd_f_lb, rev_f_lb = 0.0, 0.0
-        for rxn_id, rxn_f in rxn_steps:
+    def _calc_new_rxn_bounds(self, rxn_id, rxn_f):
+        if rxn_id in self._p_orig_bounds:
+            rxn_lb, rxn_ub = self._p_orig_bounds[rxn_id][0]*rxn_f/100.0, self._p_orig_bounds[rxn_id][1]*rxn_f/100.0
+            fwd_f = max(rxn_ub, 0.0)
+            fwd_f_lb = max(rxn_lb, 0.0)
+            rev_f = abs(min(rxn_lb, 0.0))
+            rev_f_lb = abs(min(rxn_ub, 0.0))
+        else:
             fwd_f, rev_f = 0.0, 0.0
             if rxn_f >= 0:
                 fwd_f = rxn_f + self.epsilon
@@ -116,12 +127,22 @@ class DiscreteModelResults(object):
                 fwd_f_lb, rev_f_lb = fwd_f-self.epsilon, rev_f-self.epsilon
                 rxn_lb, rxn_ub = rxn_f, rxn_f+self.epsilon
             else:
+                fwd_f_lb, rev_f_lb = 0.0, 0.0
                 rxn_lb, rxn_ub = min(rxn_f, 0.0), max(rxn_f+self.epsilon, 0.0)
+        return rxn_lb, rxn_ub, fwd_f_lb, fwd_f, rev_f_lb, rev_f
+    def _set_reaction_bounds(self, rxn_steps):
+        for rxn_id, rxn_f in rxn_steps:
+            rxn_lb, rxn_ub, fwd_f_lb, fwd_f, rev_f_lb, rev_f = self._calc_new_rxn_bounds(rxn_id, rxn_f)
             self.rev_lp.change_variable_bounds(self._rev_m_rxn_ind[rxn_id], rxn_lb, rxn_ub)
             self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rxn_id], fwd_f_lb, fwd_f)
             rev_id = rxn_id + self._rxn_rev_suffix
             if rev_id in self._irr_m_rxn_ind:
                 self.irr_lp.change_variable_bounds(self._irr_m_rxn_ind[rev_id], rev_f_lb, rev_f)
+            if rxn_id in self._mtb_update:
+                new_coef = self._mtb_update[rxn_id]['mtb_orig_coef']*rxn_f/100.0
+                self.rev_lp.change_coefficient(self._mtb_update[rxn_id]['mtb_rev_ind'], self._mtb_update[rxn_id]['rev_ind'], new_coef)
+                self.irr_lp.change_coefficient(self._mtb_update[rxn_id]['mtb_irr_ind'], self._mtb_update[rxn_id]['irr_ind'], new_coef)
+
     def _measure_reactions(self, data_ind, obj_f, total_f):
         self.data[data_ind][0] = obj_f
         self.data[data_ind][1] = total_f
@@ -151,20 +172,23 @@ class DiscreteModelResults(object):
 
     # # # # #  Private methods: input and setup. # # # # #
     def _parse_inputs(self, to_modify, to_measure):
-        # Sets self.modified, self.measured, self.measured_attrs, self._measured_ind, self._steps
+        # Sets self.modified, self.measured, self.measured_attrs, self._p_orig_bounds, self._mtb_update, self._measured_ind, self._steps
         default_modified_attrs = {'coefficient':1.0}
         default_measured_attrs = {'coefficient':1.0}
         if not to_modify or not to_measure:
             print('Error: at least one reaction must be given to modify, and at least one to measure')
             exit()
         self.modified = []
-        self.modified_attrs, self.measured_attrs = [], {}
+        self.modified_attrs, self.measured_attrs, self._p_orig_bounds = [], {}, {}
         for m in to_modify: # Retains the given order.
             if isinstance(m[0], basestring): # If it is a rxnID string.
                 self.modified.append( [m[0]] )
             else: # If it is a list of rxnID strings.
                 self.modified.append( m[0] )
             self.modified_attrs.append(dict(default_modified_attrs, label=m[1]))
+            if len(m[2]) == 4 and m[2][3] == 'percent':
+                for r_id in self.modified[-1]:
+                    self._p_orig_bounds[r_id] = None
         self.measured = list(sorted(to_measure.keys())) # Sorted by reaction id.
         while self._obj_fxn_id in self.measured:
             self._obj_fxn_id = '_' + self._obj_fxn_id
@@ -175,8 +199,9 @@ class DiscreteModelResults(object):
         self.measured_attrs.setdefault(self._obj_fxn_id, {'label':self._obj_fxn_label}).update(default_measured_attrs)
         self.measured_attrs.setdefault(self._total_flux_rxn_id, {'label':self._total_flux_rxn_label}).update(default_measured_attrs)
         self._measured_ind = {m:i+2 for i,m in enumerate(self.measured)} # Gives index in self.data.
-        self._steps = [self._expand_steps(*m[2:]) for m in to_modify] # A list of lists, where each sublist contains the flux steps for one modify reaction series.
-    def _setup_models(self, model):
+        self._steps = [self._expand_steps(*m[2][:3]) for m in to_modify] # A list of lists, where each sublist contains the flux steps for one modify reaction series.
+
+    def _setup_models(self, model, mtb_update):
         # Sets self.irr_lp, self.rev_lp, self.irr_model, self.rev_model, self._obj_ind, self._obj_ub, self._irr_m_rxn_ind, self._rev_m_rxn_ind
         if len(model.objective) != 1:
             print('The model can only have 1 objective function.')
@@ -192,6 +217,10 @@ class DiscreteModelResults(object):
             else:
                 bounds = tuple(sorted([0.0, init_flux]))
             for r_id in rxn_group:
+                if r_id in self._p_orig_bounds: # Means it gets modified by relative amount, not set to an absolute.
+                    bnds = model.reactions.get_by_id(r_id).bounds
+                    self._p_orig_bounds[r_id] = bnds
+                    bounds = (bnds[0]*init_flux/100.0, bnds[1]*init_flux/100.0)
                 self.rev_model.reactions.get_by_id(r_id).bounds = bounds
                 self.irr_model.reactions.get_by_id(r_id).bounds = bounds
 
@@ -220,9 +249,19 @@ class DiscreteModelResults(object):
                 rev_m_rxn_ind[r_id] = None
                 if rev_id in self.irr_model.reactions:
                     irr_m_rxn_ind[rev_id] = None
+
+        self._mtb_update = {}
+        if mtb_update == None:
+            mtb_update = (None, None, None)
+        else:
+            rxn_dict = self.rev_model.reactions.get_by_id(mtb_update[1]).metabolites
+            orig_coef = rxn_dict[self.rev_model.metabolites.get_by_id(mtb_update[0])]
+            self._mtb_update[mtb_update[2]] = {'rev_ind':None, 'irr_ind':None, 'mtb_rev_ind':None, 'mtb_irr_ind':None, 'mtb_orig_coef':orig_coef}
         for i, rxn in enumerate(self.rev_model.reactions):
             if rxn.id in rev_m_rxn_ind:
                 rev_m_rxn_ind[rxn.id] = i
+            if rxn.id == mtb_update[1]:
+                self._mtb_update[mtb_update[2]]['rev_ind'] = i
         for i, rxn in enumerate(self.irr_model.reactions):
             if rxn.objective_coefficient != 0:
                 if rxn.upper_bound <= 0:
@@ -235,6 +274,8 @@ class DiscreteModelResults(object):
                 self.irr_lp.change_variable_objective(i, 1)
             if rxn.id in irr_m_rxn_ind:
                 irr_m_rxn_ind[rxn.id] = i
+            if rxn.id == mtb_update[1]:
+                self._mtb_update[mtb_update[2]]['irr_ind'] = i
         for r_id, ind in irr_m_rxn_ind.items():
             if ind == None:
                 print('"%s" in modify or measured did not have an index in the model' % r_id)
@@ -242,6 +283,13 @@ class DiscreteModelResults(object):
         if obj_ind == None:
             print('Could not find an index for the objective function')
             exit()
+        if self._mtb_update:
+            for i, mtb in enumerate(self.rev_model.metabolites):
+                if mtb.id == mtb_update[0]:
+                    self._mtb_update[mtb_update[2]]['mtb_rev_ind'] = i
+            for i, mtb in enumerate(self.irr_model.metabolites):
+                if mtb.id == mtb_update[0]:
+                    self._mtb_update[mtb_update[2]]['mtb_irr_ind'] = i
         self._obj_ind = obj_ind
         self._irr_m_rxn_ind = irr_m_rxn_ind
         self._rev_m_rxn_ind = rev_m_rxn_ind
@@ -301,7 +349,7 @@ class DmrVisualization(object):
         plt.tight_layout()
         plt.show()
 
-    def heatmaps_3var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=1.65, graph_height=1.65, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=10, fig_top_padding=None):
+    def heatmaps_3var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=1.65, graph_height=1.65, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=7, fig_top_padding=None):
         """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps. graph_colorbar_width_frac is a proportion of graph_width; so 0.25 means it is set to 25% of graph_width. row_label_width and row_squish do X. If not given a crude estimation will be used. row_label_rpad is the space between the label and the y-axis of the graph."""
         if len(dmr.modified) != 3:
             print('Error: heatmaps_3var() can only be called with 3 dimensional data.')
@@ -416,7 +464,7 @@ class DmrVisualization(object):
         return measured_rxns
     def _calculate_3var_size_parameters(self, nrows, ncols, graph_width, graph_height, dim3_label, row_label_width, graph_colorbar_width_frac, row_squish, fig_top_padding):
         if row_label_width == None:
-            row_label_width = 0.48 + len(dim3_label) / 17.0
+            row_label_width = 0.50 + len(dim3_label) / 16.0
         if graph_colorbar_width_frac == None:
             graph_colorbar_width_frac = 0.27 + (ncols+1)**-1.85
         figsize = (ncols*graph_width*(1+graph_colorbar_width_frac)+row_label_width, nrows*graph_height)
@@ -506,13 +554,19 @@ if __name__ == '__main__':
     model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
     models = [read_excel(m_file, verbose=False) for m_file in model_files]
-    model = models[7]
+    model = models[0]
 
     to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01900_M':'Citrate -> Isocitrate', 'R01082_M':'Fumarate -> malate', 'R02570_M':'AKG -> Succinyl-CoA', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
     negative_modified = [] # Must use the labels here, not the reaction IDs.
     negative_measured = ['R01082_M', 'R00086_M', 'R01900_M', 'R02570_M'] # Must use reaction IDs.
     aa_ids = ['NUTRIENTS_%i'%i for i in range(1,21)]
-    tight_bounds = False
+    wol_scale_ids = []
+    for rxn in model.reactions:
+        if rxn.id.startswith('W_TRANS_') or rxn.id in ('BIO_NGAM_W',) or (rxn.id.startswith(('DIFFUSION_','CARBON_SOURCE_','FA_SOURCE_','SINK_','R')) and rxn.id.endswith('_W')):
+            wol_scale_ids.append(rxn.id)
+
+    tight_bounds = False # Doesn't work with percent in to_modify
+    modify_mtb_ratio_in_rxn_along = ('Bio_unscaled_w', 'BIOMASS_SCALED', 'DIFFUSION_1_W') # (mtb_id, in_rxn_id, along_rxn_id). Every time along_rxn_id has its bounds modified, the coefficient of mtb_id in in_rxn_id is also modified. along_rxn_id MUST be modified by 'percent', not absolute value.
 
     show_2var_heatmap = False
     show_3var_heatmap = True
@@ -527,10 +581,13 @@ if __name__ == '__main__':
         vis = DmrVisualization()
         vis.heatmaps_2var(results, to_display, include_objective=True, include_total_flux=True)
     if show_3var_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 25), ('FA_SOURCE', 'Fatty acids', 45, 70, 6)]
-        to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
+        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (35, 70, 6))]
+        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), (wol_scale_ids, 'wBm percent', (18, 48, 6, 'percent'))]
 
-        results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
+        to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3']
+        to_display = ['R01082_M']
+
+        results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds, mtb_update=modify_mtb_ratio_in_rxn_along)
         results.negative_modified(negative_modified)
         results.negative_measured(negative_measured)
         vis = DmrVisualization()
