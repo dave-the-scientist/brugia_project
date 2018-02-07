@@ -64,6 +64,20 @@ pathways_for_analysis = [
 #test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
 #test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
+def load_model(file_path, wol_ratio=0.1, scale_obj_rxn_id='BIOMASS_SCALED', scale_obj_mtb_id='Bio_unscaled_w', verbose=False):
+    """Loads the model from file_path, and then adjusts the wolbachia. The ratio of wolbachia / worm biomass in the objective function is set to wol_ratio, and all wolbachia reactions have their bounds scaled by the same ratio. If the model has been previously scaled, it is adjusted to the given ratio."""
+    model = read_excel(file_path, verbose=verbose)
+    scale_rxn = model.reactions.get_by_id(scale_obj_rxn_id)
+    scale_mtb = model.metabolites.get_by_id(scale_obj_mtb_id)
+    cur_ratio = scale_rxn.metabolites[scale_mtb] * -1.0
+    if cur_ratio != wol_ratio:
+        wol_scale = wol_ratio / cur_ratio
+        scale_rxn._metabolites[scale_mtb] *= wol_scale
+        for rxn in model.reactions:
+            if rxn.id.startswith('W_TRANS_') or rxn.id in ('BIO_NGAM_W',) or (rxn.id.startswith(('DIFFUSION_','CARBON_SOURCE_','FA_SOURCE_','SINK_','R')) and rxn.id.endswith('_W')):
+                rxn.bounds = (rxn.bounds[0]*wol_scale, rxn.bounds[1]*wol_scale)
+    return model
+
 def basic_stats(model):
     descrip_str = '\n\nBasic stats for model: %s' % model
     print('%s\n%s' % (descrip_str, '='*len(descrip_str.strip())))

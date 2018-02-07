@@ -10,8 +10,7 @@ Notes:
 import os, cPickle, pandas, re
 from molecbio import sequ
 from cobra.flux_analysis import single_reaction_deletion, double_reaction_deletion
-from model_tools import id_bottleneck_metabolites
-from read_excel import read_excel
+from model_tools import load_model, id_bottleneck_metabolites
 import xml.etree.ElementTree as ET
 
 
@@ -295,7 +294,7 @@ def parse_expression_sheet(gene_data, filename, sheetname, conditions):
             continue
         avgs = [sum(row[k] for k in ck)/float(len(ck)) for ck in cond_keys]
         max_expression = max(avgs)
-        exp = {c:'%i'%(round(a/max_expression*100.0, 0)) for a,c in zip(avgs, conditions)}
+        exp = {c:'%i'%(round(a/max_expression*100.0, 0) if max_expression else 0) for a,c in zip(avgs, conditions)}
         exp['_max_observed_expression'] = max_expression
         for entry in gene_data[seq_name]:
             entry['expression_levels'] = exp
@@ -338,33 +337,39 @@ def print_deficiencies(rxn_data):
         print('\t%s' % ', '.join(rxn_data[r_id]['genes']))
 
 
-# # #  I/O options
+# # #  Main paths
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
+utility_dir = '/home/dave/Desktop/projects/brugia_project/utility'
+
+# # #  Main run options
 model_file = 'model_b_mal_4.5-wip.xlsx'
-expression_file = 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx'
-expression_sheets = ('Brugia_FPKMs', 'Wolbachia_FPKMs')
-gen_pept_file = 'utility/b_malayi_genpept.gp'
-human_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_human_blast.xml'
-oncho_blast_xml_file = 'utility/model_b_mal_4.5-wip_single_kos_oncho_blast.xml'
-chembl_results_file = 'utility/model_b_mal_4.5-wip_single_kos_chembl.txt'
-gene_data_out_file = os.path.join(files_dir, 'bm_4.5_single_ko_gene_info.xlsx')
-# # #  Intermediate files
-prot_sequences_file = 'utility/model_b_mal_4.5-wip_single_ko_prots.fa'
-blast_results_file = 'utility/x'
-rxn_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_rxns.pkl'
-gene_ko_data_file = 'utility/model_b_mal_4.5-wip_single_kos_genes.pkl'
-# # #  Run options
+run_str = 'bm_4.5-lo_ox-lo_glu'
+wolbachia_ratio = 0.1
 objective_threshold_fraction = 0.3 # Considered significant if resulting objective function is less than 0.3 (30%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
 expression_headings = [('Max\nexpression',), ('Larval expression\n(L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression\n(F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression\n(M30|M42|M120)', ('M30','M42','M120'))]
+gene_data_out_file = os.path.join(files_dir, '%s_gene_info.xlsx'%(run_str))
+
+# # #  Required files
+expression_file = os.path.join(files_dir, 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx')
+expression_sheets = ('Brugia_FPKMs', 'Wolbachia_FPKMs')
+gen_pept_file = os.path.join(utility_dir, 'b_malayi_genpept.gp')
+human_blast_xml_file = os.path.join(utility_dir, '%s_human_blast.xml'%(run_str))
+oncho_blast_xml_file = os.path.join(utility_dir, '%s_oncho_blast.xml'%(run_str))
+chembl_results_file = os.path.join(utility_dir, '%s_chembl.txt'%(run_str))
+
+# # #  Intermediate files created
+prot_sequences_file = os.path.join(utility_dir, '%s_prots.fa'%(run_str))
+rxn_ko_data_file = os.path.join(utility_dir, '%s_rxns.pkl'%(run_str))
+gene_ko_data_file = os.path.join(utility_dir, '%s_genes.pkl'%(run_str))
 
 
 # # #  Run steps
 if not os.path.isfile(rxn_ko_data_file):
     rxn_data = {}
     model_path = os.path.join(files_dir, model_file)
-    model = read_excel(model_path, verbose=False)
+    model = load_model(model_path, wolbachia_ratio)
     rxn_to_genes = get_rxns_to_delete(model)
     do_deletions(rxn_data, model, rxn_to_genes, do_double_ko, objective_threshold_fraction) # Fills out 'objective', 'deficiencies', and 'genes' of reactions in rxn_data.
     save_data_object(rxn_data, rxn_ko_data_file)
@@ -375,7 +380,7 @@ else:
 
 if not os.path.isfile(gene_ko_data_file):
     gene_data = process_gene_data(rxn_data)
-    get_expression_data(gene_data, os.path.join(files_dir, expression_file), expression_sheets, expression_conditions) # Fills out 'expression_levels'
+    get_expression_data(gene_data, expression_file, expression_sheets, expression_conditions) # Fills out 'expression_levels'
     if not os.path.isfile(prot_sequences_file):
         prot_to_std = get_prot_name_translations(gene_data, gen_pept_file)
         prots = save_prot_sequences(gene_data, prot_to_std, prot_sequences_file)

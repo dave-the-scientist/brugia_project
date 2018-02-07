@@ -2,6 +2,7 @@ import os, itertools
 from math import ceil, floor, sqrt
 import numpy as np
 import cobra
+from model_tools import load_model
 from read_excel import read_excel
 import matplotlib
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ class DiscreteModelResults(object):
     to_modify: A list of tuples.
     self.data: numpy.Matrix. The main data structure is an (n+1)-dimensional matrix, where n is the number of modified reactions. Each position in the matrix holds a 1-dimensional array, whose 0-th entry is the objective function flux at that condition, the 1-th entry is the total flux in the entire system at that condition, and the following values are the flux through each reaction in self.measured, sorted by the name of the reaction ID.
     """
-    def __init__(self, model, to_modify, to_measure, tight_bounds=False, mtb_update=None, solver=None):
+    def __init__(self, model, to_modify, to_measure, mtb_update=None, tight_bounds=False, solver=None):
         self.name = str(model) # Name of the model.
         self.modified = [] # List of reaction groups, each a list of ids that will be modified and tested.
         self.modified_attrs = [] # List of dicts, with properties used for graphing.
@@ -550,10 +551,12 @@ def _expand_steps(_min, _max, _steps):
 # - If the bounds on to_modify are illegal based on reaction bounds, get a ZeroDivisionError. Should be checked and reported more sanely.
 
 if __name__ == '__main__':
+    init_wol_percent = 10
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
-    models = [read_excel(m_file, verbose=False) for m_file in model_files]
+    #models = [read_excel(m_file, verbose=False) for m_file in model_files]
+    models = [load_model(m_file, wol_ratio=init_wol_percent/100.0) for m_file in model_files]
     model = models[0]
 
     to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01900_M':'Citrate -> Isocitrate', 'R01082_M':'Fumarate -> malate', 'R02570_M':'AKG -> Succinyl-CoA', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
@@ -566,6 +569,7 @@ if __name__ == '__main__':
             wol_scale_ids.append(rxn.id)
 
     tight_bounds = False # Doesn't work with percent in to_modify
+
     modify_mtb_ratio_in_rxn_along = ('Bio_unscaled_w', 'BIOMASS_SCALED', 'DIFFUSION_1_W') # (mtb_id, in_rxn_id, along_rxn_id). Every time along_rxn_id has its bounds modified, the coefficient of mtb_id in in_rxn_id is also modified. along_rxn_id MUST be modified by 'percent', not absolute value.
 
     show_2var_heatmap = False
@@ -582,12 +586,12 @@ if __name__ == '__main__':
         vis.heatmaps_2var(results, to_display, include_objective=True, include_total_flux=True)
     if show_3var_heatmap:
         to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (35, 70, 6))]
-        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), (wol_scale_ids, 'wBm percent', (18, 48, 6, 'percent'))]
+
+        #to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), (wol_scale_ids, 'wBm percent', (18, 48, 6, 'percent'))]
 
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3']
-        to_display = ['R01082_M']
 
-        results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds, mtb_update=modify_mtb_ratio_in_rxn_along)
+        results = DiscreteModelResults(model, to_modify, to_measure, mtb_update=modify_mtb_ratio_in_rxn_along, tight_bounds=tight_bounds)
         results.negative_modified(negative_modified)
         results.negative_measured(negative_measured)
         vis = DmrVisualization()
