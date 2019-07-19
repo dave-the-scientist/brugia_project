@@ -10,7 +10,7 @@ model.reactions.R02146.x is the flux through the reaction in the current FBA sta
 model.reactions.R02146.reaction is a human-readable description.
 """
 from math import sqrt
-import os, itertools, cobra
+import os, itertools, cobra, pandas
 from read_excel import read_excel, write_excel
 
 
@@ -64,9 +64,14 @@ pathways_for_analysis = [
 #test_rxns = ['R01061', 'R01512', 'R00024', 'R01523', 'R01056', 'R01641', 'R01845', 'R01829', 'R01067']
 #test_data = [(r, min_flux+i*(max_flux-min_flux)/(len(test_rxns)-1)) for i, r in enumerate(test_rxns)]
 
+
 def load_model(file_path, wol_ratio=0.1, scale_obj_rxn_id='BIOMASS_SCALED', scale_obj_mtb_id='Bio_unscaled_w', verbose=False):
     """Loads the model from file_path, and then adjusts the wolbachia. The ratio of wolbachia / worm biomass in the objective function is set to wol_ratio, and all wolbachia reactions have their bounds scaled by the same ratio. If the model has been previously scaled, it is adjusted to the given ratio."""
     model = read_excel(file_path, verbose=verbose)
+    set_model_wolbachia(model, wol_ratio, scale_obj_rxn_id, scale_obj_mtb_id)
+    return model
+
+def set_model_wolbachia(model, wol_ratio=0.1, scale_obj_rxn_id='BIOMASS_SCALED', scale_obj_mtb_id='Bio_unscaled_w'):
     scale_rxn = model.reactions.get_by_id(scale_obj_rxn_id)
     scale_mtb = model.metabolites.get_by_id(scale_obj_mtb_id)
     cur_ratio = scale_rxn.metabolites[scale_mtb] * -1.0
@@ -76,7 +81,6 @@ def load_model(file_path, wol_ratio=0.1, scale_obj_rxn_id='BIOMASS_SCALED', scal
         for rxn in model.reactions:
             if rxn.id.startswith('W_TRANS_') or rxn.id in ('BIO_NGAM_W',) or (rxn.id.startswith(('DIFFUSION_','CARBON_SOURCE_','FA_SOURCE_','SINK_','R')) and rxn.id.endswith('_W')):
                 rxn.bounds = (rxn.bounds[0]*wol_scale, rxn.bounds[1]*wol_scale)
-    return model
 
 def basic_stats(model):
     descrip_str = '\n\nBasic stats for model: %s' % model
@@ -393,6 +397,75 @@ def kegg_search_color_pathway_fva(data, min_val, max_val, min_col, zero_col, max
         buff.append('%s %s' % (r_id, var_col))
     return '\n'.join(buff)
 
+def active_rxn_mtb_analysis(models, fvas):
+    def classify_rxn(r_id):
+        # Returning 0 is cytosol, 1 is mitochondria, 2 is wolbachia, 3 is biomass, 4 is transport
+        if r_id.startswith('BIO'):
+            return 3
+        if r_id.startswith(('CARBON_SOURCE', 'FA_SOURCE', 'DIFFUSION', 'FA_TRANS', 'NUTRIENTS', 'SINK', 'TRANSPORT', 'M_TRANS', 'W_TRANS')):
+            return 4
+        if r_id.startswith(('ACYLCOA', 'N0')):
+            return 0
+        if r_id.startswith('R'):
+            if r_id.endswith('_M'):
+                return 1
+            if r_id.endswith('_W'):
+                return 2
+            return 0
+        print('Error: could not classify reaction {:s}'.format(r_id))
+        exit()
+    def classify_mtbs(m_id):
+        # Returning 0 is cytosol, 1 is mitochondria, 2 is wolbachia, 3 is biomass
+        if m_id.startswith('Bio'):
+            return 3
+        if m_id.startswith(('C','G', 'FA_storage_mix')):
+            return 0
+        if m_id.startswith('M'):
+            return 1
+        if m_id.startswith('W'):
+            return 2
+        print('Error: could not classify metabolite {:s}'.format(m_id))
+        exit()
+    def format_compartment_usage(compartments, used_counts):
+        #used_counts = [[[current,possible], ...], ...]; it has 1 sub-list per model in models, and each of those sub-lists contains 1 [current,possible] per compartment in compartments. cur and pos are sets containing all elements used in the current solution, or in any optimal solution (for possible).
+        comp_max_len = max(len(comp) for comp in compartments)
+        usages, usage_strs = [], []
+        for model_usage in used_counts:
+            usage = ['{:d}({:d})'.format(len(count_set[0]),len(count_set[1])) for count_set in model_usage]
+            usages.append(usage)
+            max_str_len = max(len(u) for u in usage)
+            usage_strs.append('{{:>{:d}s}}'.format(max_str_len))
+        usage_str = '{{:<{:d}s}} {}'.format(comp_max_len+1, ' | '.join(usage_strs))
+        return '\n'.join(usage_str.format(comp+':', *usage) for comp,usage in zip(compartments, zip(*usages)))
+
+    epsilon = 1E-4
+    rxn_types = ['Cytosol', 'Mitochondria', 'Wolbachia', 'Biomass', 'Transport']
+    mtb_types = ['Cytosol', 'Mitochondria', 'Wolbachia', 'Biomass']
+    # Get usage information
+    used_rxns, used_mtbs = [], []
+    for i, (model, fva) in enumerate(zip(models, fvas)):
+        used_rxns.append( [[set(), set()] for rxn_type in rxn_types] )
+        used_mtbs.append( [[set(), set()] for mtb_type in mtb_types] )
+        for rxn in model.reactions:
+            r_id = rxn.id
+            if abs(rxn.x) > epsilon:
+                used_rxns[i][classify_rxn(r_id)][0].add(r_id)
+                for mtb, stoich in rxn.metabolites.items():
+                    if abs(stoich) > 0:
+                        used_mtbs[i][classify_mtbs(mtb.id)][0].add(mtb.id)
+            if abs(fva[r_id]['minimum']) > epsilon or abs(fva[r_id]['maximum']) > epsilon:
+                used_rxns[i][classify_rxn(r_id)][1].add(r_id)
+                for mtb, stoich in rxn.metabolites.items():
+                    if abs(stoich) > 0:
+                        used_mtbs[i][classify_mtbs(mtb.id)][1].add(mtb.id)
+    # Compile and print
+    desc_str = 'Usages: {:s}'.format( ' | '.join( str(m) for m in models ) )
+    desc_str_underline = '-' * min(len(desc_str.strip()), 80)
+    buff = ['\n{:s}\n{:s}'.format(desc_str, desc_str_underline)]
+    buff.append('\tReactions:\n{}\n'.format(format_compartment_usage(rxn_types, used_rxns)))
+    buff.append('\tMetabolites:\n{}\n'.format(format_compartment_usage(mtb_types, used_mtbs)))
+    print('\n'.join(buff))
+
 def pathway_analysis(models, fvas, pathways):
     range_str, no_range_str = '%i/%i %i', '%i'
     desc_str = 'Fluxes: %s' % (' | '.join('%s %.1f'%(str(m), m.solution.f) for m in models))
@@ -441,12 +514,12 @@ def pathway_analysis(models, fvas, pathways):
 
 def wol_transport_analysis(models, fvas):
     print('\n\tWolbachia transport reactions for %s:' % (models[0]))
+    rxn_w_prefs = ('DIFFUSION', 'CARBON_SOURCE', 'FA_SOURCE')
     buff = []
     name_len, val_len = 0, 0
     for rxn in models[0].reactions:
-        if rxn.id.startswith('DIFFUSION') and rxn.id.endswith('_W') or \
-        rxn.id.startswith('W_TRANS_') or \
-        rxn.id.startswith('CARBON_SOURCE') and rxn.id.endswith('_W'):
+        if rxn.id.startswith(rxn_w_prefs) and rxn.id.endswith('_W') or \
+        rxn.id.startswith('W_TRANS_'):
             bounds = sorted((round(fvas[0][rxn.id]['minimum'], 0), round(fvas[0][rxn.id]['maximum'], 0)))
             if bounds == (0, 0):
                 val = 'N/A'
@@ -577,6 +650,28 @@ def id_bottleneck_metabolites(model, orig_f, rxn_id, threshold=1.0):
             diffs.append((new_f-orig_f, mtb.id))
     return diffs
 
+def summary_excluding(model, mtb_id, excluding=set()):
+    """Displays reactions that produce and consume mtb_id, excluding those that also involve a mtb_id found in excluded."""
+    consumed, produced = [], []
+    mtb = model.metabolites.get_by_id(mtb_id)
+    for rxn in mtb.reactions:
+        flx = rxn.x * rxn.metabolites[mtb]
+        if flx == 0 or any(m.id in excluded for m in rxn.metabolites):
+            continue
+        elif flx > 0:
+            produced.append((rxn.id, flx, rxn.reaction))
+        elif flx < 0:
+            consumed.append((rxn.id, flx, rxn.reaction))
+    produced.sort(key=lambda t: -abs(t[1]))
+    consumed.sort(key=lambda t: -abs(t[1]))
+    print('\nProduced by:')
+    for r_id, flx, rxn_str in produced:
+        print('%4s [%s]  %s' % (str(int(round(flx,0))), r_id, rxn_str))
+    print('\nConsumed by:')
+    for r_id, flx, rxn_str in consumed:
+        print('%4s [%s]  %s' % (str(int(round(-flx,0))), r_id, rxn_str))
+
+
 def run():
     # # #  Parameters
     min_flux = -1000
@@ -587,20 +682,36 @@ def run():
     colour_range = (min_colour, zero_colour, max_colour)
 
     # # #  Run-time options
+    wolbachia_percent = 10.0
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_files = ['model_b_mal_4.5-wip.xlsx']
+    #model_files = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_4.5-holg.xlsx', 'model_b_mal_4.5-lohg.xlsx', 'model_b_mal_4.5-lolg.xlsx']
+    #model_files = ['model_bm_5_L3.xlsx', 'model_bm_5_L3D6.xlsx', 'model_bm_5_L3D9.xlsx', 'model_bm_5_L4.xlsx']
+    #model_files = ['model_bm_5_M30.xlsx', 'model_bm_5_F30.xlsx', 'model_bm_5_M42.xlsx', 'model_bm_5_F42.xlsx', 'model_bm_5_M120.xlsx', 'model_bm_5_F120.xlsx']
+    model_files = ['model_bm_5_L3.xlsx', 'model_bm_5_M30.xlsx', 'model_bm_5_F30.xlsx', 'model_bm_5_M42.xlsx', 'model_bm_5_F42.xlsx', 'model_bm_5_M120.xlsx', 'model_bm_5_F120.xlsx']
+    model_files = []
+
     mtb_cmp_str = '%s_wip.xlsx'
     verbose = True
     topology_analysis = False
     fba_analysis = False
-    fva_analysis = True
+    fva_analysis = False
     save_visualizations = False
     do_reaction_mtb_comparison = None # 'C00080', or None
     test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.
-    show_wol_transports = True
+    show_wol_transports = False
 
     model_files = [os.path.join(files_dir, m_file) for m_file in model_files]
-    models = [read_excel(m_file, verbose=verbose) for m_file in model_files]
+    models = [load_model(m_file, wol_ratio=wolbachia_percent/100.0, verbose=verbose) for m_file in model_files]
+
+    set_nutrients = False
+    if set_nutrients:
+        #nutrients = [('CARBON_SOURCE', (0, 250)), ('DIFFUSION_2', (0, 580))] # HOHG
+        #nutrients = [('CARBON_SOURCE', (0, 45)), ('DIFFUSION_2', (0, 580))] # HOLG
+        #nutrients = [('CARBON_SOURCE', (0, 250)), ('DIFFUSION_2', (0, 90))] # LOHG
+        nutrients = [('CARBON_SOURCE', (0, 45)), ('DIFFUSION_2', (0, 90))] # LOLG
+        for model in models:
+            for name, bounds in nutrients:
+                model.reactions.get_by_id(name).bounds = bounds
 
     if do_reaction_mtb_comparison:
         new_model_files, new_models = [], []
@@ -642,6 +753,7 @@ def run():
             fvas.append(m_fva)
             if save_visualizations:
                 visualize_fva_reactions(m_fva, (min_flux, max_flux), colour_range, viz_str)
+        active_rxn_mtb_analysis(models, fvas)
         pathway_analysis(models, fvas, pathways_for_analysis)
         if show_wol_transports:
             wol_transport_analysis(models, fvas)
@@ -658,7 +770,7 @@ def run():
         diffs = [d for d in diffs if d]
         diffs.sort(key=lambda d: -d[0])
         for d in diffs:
-            print d
+            print(d)
 
     return models, fvas
 

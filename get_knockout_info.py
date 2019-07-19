@@ -213,6 +213,8 @@ def parse_blast_xml(gene_data, blast_xml_file, taxon_name, spc_str):
     iterations = root.find('BlastOutput_iterations')
     for q_hit in iterations:
         gene = q_hit.find('Iteration_query-def').text
+        if gene not in gene_data:
+            continue
         prot_len = float(q_hit.find('Iteration_query-len').text)
         s_hits = q_hit.find('Iteration_hits')
         hit_names, top_hit_id, top_e_val, top_identity, top_coverage = get_good_hits(s_hits, min_e_val, spc_str.lower(), gi_split_regex, gene_spc_regex, isoform_regex)
@@ -319,6 +321,8 @@ def parse_chembl_results(gene_data, chembl_results_file):
             chembl_data.setdefault(gene, []).append(hit_data)
     print('%i of the %i ChEMBL hits were below the E-value threshold of %.1e' % (sig_hits, total_hits, max_e_val))
     for gene, data_list in chembl_data.items():
+        if gene not in gene_data:
+            continue
         data_list.sort(key=lambda d: d['e_value'])
         chembl_hits = ', '.join('%s (%i | %s)' % (d['chembl_id'], round(d['identity'], 0), d['species']) for d in data_list)
         for g_data in gene_data[gene]:
@@ -345,7 +349,7 @@ utility_dir = '/home/dave/Desktop/projects/brugia_project/utility'
 model_file = 'model_b_mal_4.5-wip.xlsx'
 run_str = 'bm_4.5-lo_ox-lo_glu'
 wolbachia_ratio = 0.1
-objective_threshold_fraction = 0.3 # Considered significant if resulting objective function is less than 0.3 (30%) of the original.
+objective_threshold_fraction = 0.25 # Considered significant if resulting objective function is less than 0.25 (25%) of the original.
 do_double_ko = False
 expression_conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
 expression_headings = [('Max\nexpression',), ('Larval expression\n(L3|L3D6|L3D9|L4)', ('L3','L3D6','L3D9','L4')), ('Adult female expression\n(F30|F42|F120)', ('F30','F42','F120')), ('Adult male expression\n(M30|M42|M120)', ('M30','M42','M120'))]

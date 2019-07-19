@@ -2,7 +2,7 @@ import os, itertools
 from math import ceil, floor, sqrt
 import numpy as np
 import cobra
-from model_tools import load_model
+from model_tools import load_model, set_model_wolbachia
 from read_excel import read_excel
 import matplotlib
 import matplotlib.pyplot as plt
@@ -91,11 +91,11 @@ class DiscreteModelResults(object):
         self.rev_lp.solve_problem(objective_sense='maximize')
         self.rev_model.solution = self.solver.format_solution(self.rev_lp, self.rev_model)
         if self.rev_model.solution.status == 'infeasible':
-            # Sometimes the solution will return infeasible for no apparent reason: it would using [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (40, 80, 6))], but not for ('FA_SOURCE', 'Fatty acids', (40, 80, 5)). This is a slower way to solve, but doesn't return infeasible for those same parameters.
-            for rxn_id, rxn_f in rxn_steps:
+            # Sometimes the solution will return infeasible for no apparent reason: it would using [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (40, 80, 6))], but not for ('FA_SOURCE', 'Fatty acids', (40, 80, 5)). This is a slower way to solve, but doesn't return infeasible for those same parameters. I no longer think this is needed, and it throws errors sometimes if the configuration is infeasible.
+            """for rxn_id, rxn_f in rxn_steps:
                 rxn_lb, rxn_ub, _, _, _, _ = self._calc_new_rxn_bounds(rxn_id, rxn_f)
                 self.rev_model.reactions.get_by_id(rxn_id).bounds = (rxn_lb, rxn_ub)
-            cobra.flux_analysis.optimize_minimal_flux(self.rev_model).status
+            cobra.flux_analysis.optimize_minimal_flux(self.rev_model).status"""
         if self.rev_model.solution.status == "optimal" and self.rev_model.solution.f > self.infeasible:
             obj_f = self.rev_model.solution.f
             self.irr_lp.change_variable_bounds(self._obj_ind, obj_f-self.epsilon, self._obj_ub)
@@ -210,6 +210,18 @@ class DiscreteModelResults(object):
         self.rev_model = model.copy()
         self.irr_model = model.copy()
 
+        self.rev_lp = self.solver.create_problem(self.rev_model, objective_sense='maximize')
+        self.rev_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
+        if self.solver.get_status(self.rev_lp) != 'optimal':
+            print('The model could not be initially optimized')
+            exit()
+        cobra.manipulation.modify.convert_to_irreversible(self.irr_model)
+        self.irr_lp = self.solver.create_problem(self.irr_model, objective_sense='minimize')
+        self.irr_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
+        if self.solver.get_status(self.irr_lp) != 'optimal':
+            print('The irreversible model could not be initially optimized')
+            exit()
+
         # While I don't know why, the initial bounds of the to_modify reactions can impact the pars flux values of certain reactions (only those that are pixely, and behaving stochasitcally). The loop below should standardize the behaviour between runs.
         for rxn_group, fluxes in zip(self.modified, self._steps):
             init_flux = fluxes[0]
@@ -225,17 +237,7 @@ class DiscreteModelResults(object):
                 self.rev_model.reactions.get_by_id(r_id).bounds = bounds
                 self.irr_model.reactions.get_by_id(r_id).bounds = bounds
 
-        self.rev_lp = self.solver.create_problem(self.rev_model, objective_sense='maximize')
-        self.rev_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
-        if self.solver.get_status(self.rev_lp) != 'optimal':
-            print('The model could not be initially optimized')
-            exit()
-        cobra.manipulation.modify.convert_to_irreversible(self.irr_model)
-        self.irr_lp = self.solver.create_problem(self.irr_model, objective_sense='minimize')
-        self.irr_lp.solve_problem(objective_sense='maximize') # Make sure it's feasible.
-        if self.solver.get_status(self.irr_lp) != 'optimal':
-            print('The irreversible model could not be initially optimized')
-            exit()
+
         irr_m_rxn_ind, rev_m_rxn_ind, obj_ind = {}, {}, None
         for rxn_group in self.modified + [self.measured]: # Get LP indices of the reactions to be measured and modified.
             for r_id in rxn_group:
@@ -243,9 +245,9 @@ class DiscreteModelResults(object):
                 if r_id not in self.irr_model.reactions:
                     print('Could not find reaction "%s" in the model.' % r_id)
                     exit()
-                elif r_id in irr_m_rxn_ind:
+                """elif r_id in irr_m_rxn_ind:
                     print('Reaction "%s" was not unique in the model.' % r_id)
-                    exit()
+                    exit()"""
                 irr_m_rxn_ind[r_id] = None
                 rev_m_rxn_ind[r_id] = None
                 if rev_id in self.irr_model.reactions:
@@ -350,7 +352,7 @@ class DmrVisualization(object):
         plt.tight_layout()
         plt.show()
 
-    def heatmaps_3var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, graph_width=1.65, graph_height=1.65, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=7, fig_top_padding=None):
+    def heatmaps_3var(self, dmr, measured_rxns, include_objective=False, include_total_flux=False, colorbar_ranges=None, graph_width=1.65, graph_height=1.65, shift_colorbar=True, shared_col_colorbar=True, show_all_titles=False, show_all_x_axes=False, show_all_y_axes=False, graph_colorbar_width_frac=None, row_label_width=None, row_squish=None, row_label_rpad=7, fig_top_padding=None):
         """The final 'modified_rxn' in self.modified is the one that defines the rows. It should have a relatively small number of steps. graph_colorbar_width_frac is a proportion of graph_width; so 0.25 means it is set to 25% of graph_width. row_label_width and row_squish do X. If not given a crude estimation will be used. row_label_rpad is the space between the label and the y-axis of the graph."""
         if len(dmr.modified) != 3:
             print('Error: heatmaps_3var() can only be called with 3 dimensional data.')
@@ -365,11 +367,17 @@ class DmrVisualization(object):
         # Document what the size parameters do, inc wspace & hspace (should those be modifiable?)
         if shared_col_colorbar:
             colorbars = []
-            for m_rxn in measured_rxns:
-                flx = dmr.get_fluxes(m_rxn)
-                min_flx, max_flx = flx.min(), flx.max()
-                cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
-                colorbars.append((cmap, min_flx, max_flx))
+            if colorbar_ranges:
+                for m_rxn, _range in zip(measured_rxns, colorbar_ranges):
+                    min_flx, max_flx = _range
+                    cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
+                    colorbars.append((cmap, min_flx, max_flx))
+            else:
+                for m_rxn in measured_rxns:
+                    flx = dmr.get_fluxes(m_rxn)
+                    min_flx, max_flx = flx.min(), flx.max()
+                    cmap = self._shiftedColorMap(self.colormap, min_flx, max_flx, name='%s_colormap'%m_rxn)
+                    colorbars.append((cmap, min_flx, max_flx))
         else:
             colorbars = [(self.colormap, None, None)] * ncols
         fig = plt.figure(figsize=figsize)
@@ -419,7 +427,12 @@ class DmrVisualization(object):
             title = dmr.measured_attrs[measured_rxn]['label']
         else:
             title = None
-        colorbar_ticks = [int(ceil(fluxes.min())), 0, int(floor(fluxes.max()))] # Annotates each subplot with its own min and max value ticks, even if drawn on the same scaled colorbar.
+        colorbar_ticks = [int(ceil(fluxes.min())), int(floor(fluxes.max()))] # Annotates each subplot with its own min and max value ticks, even if drawn on the same scaled colorbar.
+        # Zero is added to the colorbar ticks, unless one of the other values is close enough that the text would overlap.
+        cbar_min_zero_dist = (colorbar_ticks[1] - colorbar_ticks[0]) / 10.0
+        if abs(colorbar_ticks[0]) > cbar_min_zero_dist and abs(colorbar_ticks[1]) > cbar_min_zero_dist:
+            colorbar_ticks.append(0)
+
         img = axis.imshow(fluxes, origin='lower', aspect='auto', vmin=min_flux, vmax=max_flux, cmap=colormap, interpolation=self.interpolation)
         cbar = fig.colorbar(img, ax=axis, shrink=0.94, aspect=15, pad=0.03, ticks=colorbar_ticks)
         cbar.ax.tick_params(labelsize=colorbar_label_size)
@@ -438,12 +451,14 @@ class DmrVisualization(object):
             axis.tick_params('x', which='both', bottom='off', labelbottom='off')
         if not show_y_ticks:
             axis.tick_params('y', which='both', left='off', labelleft='off')
+        x_max_ind, y_max_ind = len(dmr._steps[1]) - 1, len(dmr._steps[0]) - 1
         def format_imshow_coords(x, y):
             # Defines the mouseover text.
-            x_val = dmr._steps[1][int(x + 0.5)]
-            y_val = dmr._steps[0][int(y + 0.5)]
-            x_label = x_attrs['label']
-            y_label = y_attrs['label']
+            x_ind, y_ind = int(x + 0.5), int(y + 0.5)
+            if x_ind > x_max_ind or y_ind > y_max_ind:
+                return 'Index out of range'
+            x_val, y_val = dmr._steps[1][x_ind], dmr._steps[0][y_ind]
+            x_label, y_label = x_attrs['label'], y_attrs['label']
             return '%s=%.2f, %s=%.2f' % (x_label, x_val, y_label, y_val)
         axis.format_coord = format_imshow_coords # Sets the mouseover text.
     def _generate_axis_ticks(self, coef, steps):
@@ -553,49 +568,70 @@ def _expand_steps(_min, _max, _steps):
 if __name__ == '__main__':
     init_wol_percent = 10
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
+    #model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
+    model_names = ['model_bm_5.xlsx']
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
     #models = [read_excel(m_file, verbose=False) for m_file in model_files]
     models = [load_model(m_file, wol_ratio=init_wol_percent/100.0) for m_file in model_files]
     model = models[0]
 
-    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R01900_M':'Citrate -> Isocitrate', 'R01082_M':'Fumarate -> malate', 'R02570_M':'AKG -> Succinyl-CoA', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste'}
+    to_measure = {'M_TRANS_5':'Mitochondrial pyruvate', 'R00351_M':'Oaa -> Citrate', 'R01900_M':'Citrate -> Isocitrate', 'R00709_M':'Icit -> Akg (NADH)', 'R00267_M':'Icit -> Akg (NADPH)', 'R02570_M':'Akg -> Succinyl-CoA', 'R00405_M':'Suc-CoA -> Succinate', 'R02164_M':'Succinate -> Fumarate', 'R01082_M':'Fumarase', 'R00342_M':'Malate -> Oaa', 'R00086_M':'ATP synthase', 'RMC0184_M':'Rhod complex I', 'RMC0183_M':'Reverse complex II', 'R00479_M':'Glyoxylate pathway', 'SINK_2':'Succinate waste', 'SINK_3':'Acetate waste', 'SINK_4':'Propanoate waste', 'DIFFUSION_9':'H+ import', 'R05688_W':'Fosmidomycin target', 'R00127':'Tenofovir target', 'R00127_W':'Tenofovir Wolbachia', 'R00762':'MDL-29951 target'}
     negative_modified = [] # Must use the labels here, not the reaction IDs.
-    negative_measured = ['R01082_M', 'R00086_M', 'R01900_M', 'R02570_M'] # Must use reaction IDs.
+    negative_measured = ['R01082_M', 'R00086_M', 'R00351_M', 'R01900_M', 'R02570_M', 'R00405_M', 'R05688_W'] # Must use reaction IDs.
+    # # #  Common reaction sets
     aa_ids = ['NUTRIENTS_%i'%i for i in range(1,21)]
     wol_scale_ids = []
     for rxn in model.reactions:
         if rxn.id.startswith('W_TRANS_') or rxn.id in ('BIO_NGAM_W',) or (rxn.id.startswith(('DIFFUSION_','CARBON_SOURCE_','FA_SOURCE_','SINK_','R')) and rxn.id.endswith('_W')):
             wol_scale_ids.append(rxn.id)
-
+    tca_ids = ['R00351_M','R01900_M','R02570_M','R00405_M','R02164_M','R01082_M','R00342_M']
+    drug_targets = ['R05688_W', 'R00127', 'R00127_W', 'R00762']
+    # # #  Run options
     tight_bounds = False # Doesn't work with percent in to_modify
-
     modify_mtb_ratio_in_rxn_along = ('Bio_unscaled_w', 'BIOMASS_SCALED', 'DIFFUSION_1_W') # (mtb_id, in_rxn_id, along_rxn_id). Every time along_rxn_id has its bounds modified, the coefficient of mtb_id in in_rxn_id is also modified. along_rxn_id MUST be modified by 'percent', not absolute value.
 
+    show_wol_ratio_graph = False
     show_2var_heatmap = False
-    show_3var_heatmap = True
+    show_3var_heatmap = False
+    show_knockout_heatmap = True
     show_3var_fva_heatmap = False
 
+
     if show_2var_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', 0, 200, 20), ('DIFFUSION_2', 'Oxygen', 0, 500, 20)]
-        to_display = ['M_TRANS_5', 'R01082_M', 'R00086_M', 'RMC0183_M', 'R00479_M']
+        inc_total_flux = False
+        inc_obj_fxn = True
+        #to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 25), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 25)]
+        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25))]
+        to_display = ['R01082_M', 'R00479_M', 'SINK_3', 'SINK_2', 'SINK_4']
+        #to_modify = [('R05688_W', 'Fosmidomycin target', (-0.0, -1.5, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25))]
+        #to_modify = [('R00127', 'Tenofovir target', (0, 60, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25))]
+        #to_modify = [('R00762', 'MDL-29951 target', (0, 0.6, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25))]
+
         results = DiscreteModelResults(model, to_modify, to_measure, tight_bounds=tight_bounds)
         results.negative_modified(negative_modified)
         results.negative_measured(negative_measured)
         vis = DmrVisualization()
-        vis.heatmaps_2var(results, to_display, include_objective=True, include_total_flux=True)
+        vis.heatmaps_2var(results, to_display, include_objective=inc_obj_fxn, include_total_flux=inc_total_flux)
     if show_3var_heatmap:
-        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (35, 70, 6))]
+        inc_total_flux = False
+        inc_obj_fxn = True
+        #to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (25, 50, 6))]
+        to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), ('FA_SOURCE', 'Fatty acids', (40, 50, 2))]
+        #to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), (wol_scale_ids, 'wBm percent', (5, 20, 4, 'percent'))] # Set init_wol_percent to 100
 
-        #to_modify = [('CARBON_SOURCE', 'Glucose', (1, 251, 25)), ('DIFFUSION_2', 'Oxygen', (1.0, 701, 25)), (wol_scale_ids, 'wBm percent', (18, 48, 6, 'percent'))]
+        to_display = ['R01082_M', 'R00479_M', 'SINK_3', 'SINK_2', 'SINK_4']
+        #to_display = ['R01082_M', 'SINK_3', 'SINK_2', 'SINK_4'] # Waste
+        #to_display = drug_targets
+        #to_display = tca_ids
 
-        to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3']
+        colorbar_ranges = None # If given, must be a list of tuples of floats, and match the order of to_display. If inc_obj_fxn==True, that must be the first range given.
+        colorbar_ranges = [(0.0,58.0), (-332.0,213.0), (0.0,220.0), (0.0,296.0), (0.0,361.0), (0.0,412.0)]
 
         results = DiscreteModelResults(model, to_modify, to_measure, mtb_update=modify_mtb_ratio_in_rxn_along, tight_bounds=tight_bounds)
         results.negative_modified(negative_modified)
         results.negative_measured(negative_measured)
         vis = DmrVisualization()
-        vis.heatmaps_3var(results, to_display, include_objective=True, include_total_flux=False)
+        vis.heatmaps_3var(results, to_display, include_objective=inc_obj_fxn, include_total_flux=inc_total_flux, colorbar_ranges=colorbar_ranges)
     if show_3var_fva_heatmap:
         to_modify = [('CARBON_SOURCE', 'Glucose', 1, 251, 10), ('DIFFUSION_2', 'Oxygen', 1.0, 701, 10), ('FA_SOURCE', 'Fatty acids', 10, 35, 4)]
         to_display = ['M_TRANS_5', 'R01082_M', 'RMC0183_M', 'R00479_M', 'SINK_2', 'SINK_3', 'SINK_4']
@@ -609,4 +645,87 @@ if __name__ == '__main__':
                 rgba = _flux_fva_to_rgb_frac(val, fva_range, min_val, max_val, max_fva_range, low_col, mid_col, high_col, var_col)
                 m[y,x] = rgba
         plt.imshow(m, origin='lower', extent=(0,max_fva_range,min_val,max_val))
+        plt.show()
+    if show_wol_ratio_graph:
+        model_file = model_files[0]
+        orig_model = load_model(model_file)
+        wol_ratios = _expand_steps(0, 1.0, 101)
+        to_modify = [('CARBON_SOURCE', 'Glucose', (45, 250, 2)), ('DIFFUSION_2', 'Oxygen', (90, 580, 2))]
+        condition_names = ['LOLG', 'HOLG', 'LOHG', 'HOHG']
+        ratio_vals = []
+        for weight in wol_ratios:
+            model = orig_model.copy()
+            set_model_wolbachia(model, wol_ratio=weight)
+            results = DiscreteModelResults(model, to_modify, to_measure, mtb_update=modify_mtb_ratio_in_rxn_along, tight_bounds=tight_bounds)
+            ratio_vals.append(results.get_objective_fluxes().flatten())
+        fig, ax = plt.subplots()
+        if not condition_names:
+            condition_names = [', '.join('{} ({:.1f})'.format(cond[1], val) for cond, val in zip(to_modify, conditions)) for conditions in itertools.product(*results._steps)]
+        for name, obj_vals in zip(condition_names, zip(*ratio_vals)):
+            ax.plot(wol_ratios, obj_vals, '-', label=name)
+        ax.set(xlabel='$\it{Wolbachia}$ weight', ylabel='Objective function')
+        ax.set_yticks([0, 10, 20, 30, 40])
+        plt.legend(bbox_to_anchor=(1.02, 0.5), loc='center left', fontsize=8, framealpha=0)
+        plt.subplots_adjust(right=0.66)
+        plt.show()
+    if show_knockout_heatmap:
+        from cobra.flux_analysis import single_reaction_deletion, double_reaction_deletion
+        from scipy.cluster.hierarchy import linkage, leaves_list
+        max_obj = float(model.optimize().f)
+        threshold = max_obj / 2.0
+        # Should I filter by only reactions with gene evidence? 849 vs 1011 to begin with.
+        #to_knockout = [rxn for rxn in model.reactions if rxn.id.startswith(('ACYL', 'N000', 'R')) and rxn.gene_names]
+        to_knockout = [rxn for rxn in model.reactions if rxn.id.startswith(('ACYL', 'N000', 'R'))]
+        s_rates, _ = single_reaction_deletion(model, to_knockout)
+        s_rxns = set(name for name, obj in s_rates.items() if obj < threshold)
+        print('Considering {} reactions from the model...'.format(len(to_knockout)))
+        print('{} single knockouts reduced biomass production below the threshold'.format(len(s_rxns)))
+        d_to_knockout = [rxn for rxn in to_knockout if rxn.id not in s_rxns]
+        double_ko_data = double_reaction_deletion(model, d_to_knockout, number_of_processes=3)
+        d_r1, d_r2, d_rates = double_ko_data['y'], double_ko_data['x'], double_ko_data['data']
+        hits = set()
+        for i in range(len(d_r1)):
+            for j in range(len(d_r2)):
+                if d_rates[i,j] < threshold:
+                    hits.add(i)
+                    hits.add(j)
+        print('{} double knockouts reduced biomass production below the threshold'.format(len(hits)))
+        hits = sorted(hits)
+        ko_data = d_rates[ np.ix_(hits, hits) ] # Selects only rows and columns in hits
+        hit_order = [hits[ind] for ind in leaves_list(linkage(ko_data, method='ward'))]
+        reaction_labels = [d_r1[ind] for ind in hit_order]
+        graph_data = d_rates[ np.ix_(hit_order, hit_order) ] / max_obj
+
+        # # #  Heatmap visual settings
+        label_reactions = False
+        title = None
+        colourmap = 'inferno'
+        colorbar_label_size = 8
+        # # #  Setup the heatmap
+        fig, ax = plt.subplots()
+        im = ax.imshow(graph_data, cmap=colourmap, vmin=0, vmax=1, origin='lower')
+        def format_imshow_coords(x, y):
+            # Defines the mouseover text.
+            x_val = int(floor(x + 0.5))
+            y_val = int(floor(y + 0.5))
+            if x_val < len(reaction_labels) and y_val < len(reaction_labels):
+                return 'x={}, y={}'.format(reaction_labels[x_val], reaction_labels[y_val])
+            else:
+                return ''
+        ax.format_coord = format_imshow_coords # Sets the mouseover text.
+        cbar = fig.colorbar(im, ax=ax, ticks=[0, 0.5, 1.0])
+        cbar.ax.tick_params(labelsize=colorbar_label_size)
+        if title != None:
+            ax.set_title(title)
+        if label_reactions:
+            ax.set_xticks(range(len(reaction_labels)))
+            ax.set_yticks(np.arange(len(reaction_labels)))
+            ax.set_xticklabels(reaction_labels)
+            ax.set_yticklabels(reaction_labels)
+            plt.xticks(fontsize=5, rotation=90)
+            plt.yticks(fontsize=5)
+        else:
+            ax.tick_params('x', which='both', bottom='off', labelbottom='off')
+            ax.tick_params('y', which='both', left='off', labelleft='off')
+        fig.tight_layout()
         plt.show()

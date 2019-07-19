@@ -94,12 +94,12 @@ def save_stage_models(model, worm_constraints, wol_constraints, conditions, mode
 
 # # #  Inputs
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
-model_file = 'model_b_mal_4.5-wip.xlsx'
+model_file = 'model_bm_5.xlsx'
 expression_file = 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx'
 worm_sheet = 'Brugia_FPKMs'
 wol_sheet = 'Wolbachia_FPKMs'
 # # #  Options
-model_out_str = 'model_b_mal_5_%s'
+model_out_str = 'model_bm_5_%s'
 conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
 worm_gene_prefix, wol_gene_prefix = 'Bm', 'AAW'
 replicate_inds = ['a', 'b', 'c']
