@@ -684,17 +684,19 @@ def run():
     # # #  Run-time options
     wolbachia_percent = 10.0
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
-    #model_files = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_4.5-holg.xlsx', 'model_b_mal_4.5-lohg.xlsx', 'model_b_mal_4.5-lolg.xlsx']
     #model_files = ['model_bm_5_L3.xlsx', 'model_bm_5_L3D6.xlsx', 'model_bm_5_L3D9.xlsx', 'model_bm_5_L4.xlsx']
     #model_files = ['model_bm_5_M30.xlsx', 'model_bm_5_F30.xlsx', 'model_bm_5_M42.xlsx', 'model_bm_5_F42.xlsx', 'model_bm_5_M120.xlsx', 'model_bm_5_F120.xlsx']
-    model_files = ['model_bm_5_L3.xlsx', 'model_bm_5_M30.xlsx', 'model_bm_5_F30.xlsx', 'model_bm_5_M42.xlsx', 'model_bm_5_F42.xlsx', 'model_bm_5_M120.xlsx', 'model_bm_5_F120.xlsx']
-    model_files = []
+    #model_files = ['model_bm_5_L3.xlsx', 'model_bm_5_M30.xlsx', 'model_bm_5_F30.xlsx', 'model_bm_5_M42.xlsx', 'model_bm_5_F42.xlsx', 'model_bm_5_M120.xlsx', 'model_bm_5_F120.xlsx']
+    #model_files = ['model_bm_6.xlsx', 'model_bm_6_lohg.xlsx', 'model_bm_6_holg.xlsx', 'model_bm_6_lolg.xlsx']
+    #model_files = ['model_bm_6_L3.xlsx', 'model_bm_6_L3D6.xlsx', 'model_bm_6_L3D9.xlsx', 'model_bm_6_L4.xlsx']
+    #model_files = ['model_bm_6_M30.xlsx', 'model_bm_6_F30.xlsx', 'model_bm_6_M42.xlsx', 'model_bm_6_F42.xlsx', 'model_bm_6_M120.xlsx', 'model_bm_6_F120.xlsx']
+    model_files = ['model_bm_6.xlsx']
 
     mtb_cmp_str = '%s_wip.xlsx'
     verbose = True
     topology_analysis = False
     fba_analysis = False
-    fva_analysis = False
+    fva_analysis = True
     save_visualizations = False
     do_reaction_mtb_comparison = None # 'C00080', or None
     test_nutrient_combos = False  # False is don't. 2 tests all combos of length 2, etc.

@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 def get_rxns_to_delete(model):
     rxn_to_genes = {}
     for rxn in model.reactions:
-        if not rxn.gene_names or not rxn.id.startswith(('R', 'ACYLCOA')):
+        if not rxn.gene_names or not rxn.id.startswith(('R', 'ACYLCOA', 'N00001')):
             continue
         rxn_to_genes[rxn.id] = [g.strip() for g in rxn.gene_names.split(';')]
     return rxn_to_genes

@@ -569,7 +569,7 @@ if __name__ == '__main__':
     init_wol_percent = 10
     files_dir = '/mnt/hgfs/win_projects/brugia_project'
     #model_names = ['model_b_mal_4.5-wip.xlsx', 'model_b_mal_5_L3.xlsx', 'model_b_mal_5_L3D6.xlsx', 'model_b_mal_5_L3D9.xlsx', 'model_b_mal_5_L4.xlsx', 'model_b_mal_5_F30.xlsx', 'model_b_mal_5_M30.xlsx', 'model_b_mal_5_M30-overconstrained.xlsx']
-    model_names = ['model_bm_5.xlsx']
+    model_names = ['model_bm_6.xlsx']
     model_files = [os.path.join(files_dir, m_file) for m_file in model_names]
     #models = [read_excel(m_file, verbose=False) for m_file in model_files]
     models = [load_model(m_file, wol_ratio=init_wol_percent/100.0) for m_file in model_files]

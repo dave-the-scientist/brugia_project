@@ -31,7 +31,53 @@ def extract_gene_reactions(model, worm_gene_prefix, wol_gene_prefix):
     print('%i unique genes from the worm, %i from the Wolbachia.' % (len(worm_genes), len(wol_genes)))
     return worm_genes, wol_genes
 
-def parse_expression_file(filename, sheetname, gene_rxns, conditions, replicate_inds):
+def parse_expression_file(filename, sheetname, conditions, replicate_inds):
+    """Returns a dict {'sequence_name':[exp_1, exp_2, ...], ...}, where exp_1 is the average FPKM value for L3, exp_2 is the average FPKM value for L3D6, etc. The order of the averages is the same as the order of 'conditions'.
+    """
+    expression = {}
+    seq_name_key = 'Sequence Name'
+    frame = pandas.read_excel(filename, sheetname)
+    if len(frame.columns) != len(set(frame.columns)):
+        print('Error: at least one column header was not unique in sheet %s.' % sheetname)
+        exit()
+    cond_keys = [[cond+ind for ind in replicate_inds if cond+ind in frame.columns] for cond in conditions]
+    for ck, cond in zip(cond_keys, conditions):
+        if len(ck) == 0:
+            print('Error: no replicates found for condition "%s" in sheet %s.' % (cond, sheetname))
+            exit()
+    for i in frame.index:
+        row = frame.ix[i]
+        seq_name = row[seq_name_key]
+        avgs = [sum(row[k] for k in ck)/float(len(ck)) for ck in cond_keys]
+        expression[seq_name] = avgs
+    print('Parsed the expression of {} genes from {}'.format(len(expression), sheetname))
+    return expression
+
+def parse_reaction_constraints(expression, gene_rxns, conditions):
+    """Returns a dict {'rxn1':[0.3, 0.99, 1.0,... condition_n], ...}.
+    """
+    rxn_consts = {}
+    for seq_name, avgs in expression.items():
+        if seq_name not in gene_rxns:
+            continue
+        # modify consts if I want more/less severe penalties
+        if any(avgs):
+            consts = [a/max(avgs) for a in avgs]
+        else:
+            consts = [0.0 for cond in conditions]
+        for rxn in gene_rxns[seq_name]:
+            rxn_consts.setdefault(rxn, []).append(consts)
+    rxn_constraints = {}
+    for rxn, const_list in rxn_consts.items():
+        if len(const_list) == 1:
+            rxn_constraints[rxn] = dict(zip(conditions, const_list[0]))
+        else:
+            # This is not the best way. Should deal with AND vs OR for genes; this is a compromise.
+            consts = [sum(stage_consts)/float(len(const_list)) for stage_consts in zip(*const_list)]
+            rxn_constraints[rxn] = dict(zip(conditions, consts))
+    print('Parsed constraints for {} reactions.'.format(len(rxn_constraints)))
+    return rxn_constraints
+def parse_reaction_constraints_OLD(filename, sheetname, gene_rxns, conditions, replicate_inds):
     """Returns a dict {'rxn1':[0.3, 0.99, 1.0,... condition_n], ...}.
     """
     rxn_consts = {}
@@ -94,12 +140,12 @@ def save_stage_models(model, worm_constraints, wol_constraints, conditions, mode
 
 # # #  Inputs
 files_dir = '/mnt/hgfs/win_projects/brugia_project'
-model_file = 'model_bm_5.xlsx'
+model_file = 'model_bm_6.xlsx'
 expression_file = 'All_Stages_Brugia_Wolbachia_FPKMs.xlsx'
 worm_sheet = 'Brugia_FPKMs'
 wol_sheet = 'Wolbachia_FPKMs'
 # # #  Options
-model_out_str = 'model_bm_5_%s'
+model_out_str = 'model_bm_6_%s'
 conditions = ['L3', 'L3D6', 'L3D9', 'L4', 'F30', 'M30', 'F42', 'M42', 'F120', 'M120']
 worm_gene_prefix, wol_gene_prefix = 'Bm', 'AAW'
 replicate_inds = ['a', 'b', 'c']
@@ -111,7 +157,10 @@ exp_path = os.path.join(files_dir, expression_file)
 model = read_excel(model_path, verbose=False)
 worm_genes, wol_genes = extract_gene_reactions(model, worm_gene_prefix, wol_gene_prefix)
 
-worm_constraints = parse_expression_file(exp_path, worm_sheet, worm_genes, conditions, replicate_inds)
-wol_constraints = parse_expression_file(exp_path, wol_sheet, wol_genes, conditions, replicate_inds)
+worm_expression = parse_expression_file(exp_path, worm_sheet, conditions, replicate_inds)
+worm_constraints = parse_reaction_constraints(worm_expression, worm_genes, conditions)
+
+wol_expression = parse_expression_file(exp_path, wol_sheet, conditions, replicate_inds)
+wol_constraints = parse_reaction_constraints(wol_expression, wol_genes, conditions)
 
 save_stage_models(model, worm_constraints, wol_constraints, conditions, model_out_str, files_dir)

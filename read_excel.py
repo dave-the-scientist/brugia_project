@@ -144,6 +144,8 @@ def read_excel(
             met_attributes = {}
             if met_compartment_key is not None:
                 compartment = extract(met_row, met_compartment_key)
+            else:
+                compartment = None
             if met_formula_key is not None:
                 formula = extract(met_row, met_formula_key)
                 if formula is not None and formula.lower() != "None":
